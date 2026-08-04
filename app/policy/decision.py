@@ -1,19 +1,22 @@
 """
-Deterministic pedagogical decision policy.
+Deterministic pedagogical decision policy — a direct implementation of the
+spec's §1.5 pseudocode for `decide_pedagogical_action`.
 
-`decide_pedagogical_action` is a pure function: given a DecisionSignals
-struct, it returns an Action. No I/O, no model calls, no randomness, no
-mutation of its input. This is what makes it exhaustively unit-testable and
-what makes it impossible for the LLM to talk its way around a hard gate —
-the gate is evaluated in Python before any generation happens.
+This is a pure function: given a DecisionSignals struct, it returns an
+Action. No I/O, no model calls, no randomness, no mutation of its input.
+That is what makes it exhaustively unit-testable and what makes it
+impossible for the LLM to talk its way around a hard gate — the gate is
+evaluated in Python before any generation happens.
 
-Branch order matters and is enforced by early return:
-    1. Hard gates (integrity / exam-mode) — always win, no exceptions.
-    2. Frustration override.
-    3. Mastery-based shortcut for high performers.
-    4. Core Socratic hint ladder (practice / hint_request intents).
-    5. Fallback branches for check_work / concept_explain / exam_prep.
-    6. Default fallback for anything else (e.g. off_topic).
+Branch order matters and is enforced by early return, matching the spec
+exactly:
+    1. Hard gates (integrity / assessment mode) — always win, no exceptions.
+    2. IA/EE routing (never full ghostwriting).
+    3. Frustration override.
+    4. Mastery-based shortcut for high performers.
+    5. Core Socratic ladder for solve_request.
+    6. Fallback branches for check_work / concept_explain / exam_prep.
+    7. Default fallback for anything else (general_chat).
 """
 
 from __future__ import annotations
@@ -23,16 +26,57 @@ from app.models.contracts import (
     ActionType,
     AssessmentMode,
     DecisionSignals,
+    FrustrationLevel,
     IntegrityRisk,
     IntentType,
+    MAX_HINT_LADDER_LEVEL,
 )
 
-# Named thresholds so tests (and future tuning) don't deal in magic numbers.
+# Named per spec §1.5's decision table row: "solve_request, practice, low,
+# >=0.85, any, none -> brief confirm + challenge/extension question".
 HIGH_MASTERY_THRESHOLD = 0.85
-MAX_HINT_LEVEL = 4
 
-_LADDER_INTENTS = (IntentType.PRACTICE, IntentType.HINT_REQUEST)
-_MASTERY_SHORTCUT_INTENTS = (IntentType.PRACTICE, IntentType.EXAM_PREP)
+# Per spec pseudocode: attempt_count in (2,3) hints are capped at level 2;
+# attempt_count >= 4 hints are capped at the ladder's max level.
+MID_ATTEMPT_HINT_CAP = 2
+
+
+def _route_to_ia_supervisor(signals: DecisionSignals) -> Action:
+    """
+    Spec §1.5: `if signals.intent == "ia_ee_help": return
+    route_to_ia_supervisor(signals) # see 2.10 — never full ghostwriting`.
+
+    The full IA Supervisor Agent (spec §11) — state machine, guard
+    architecture, disclosure logging — is far outside Phase 1's reasoning
+    core and is not built here. This stub preserves the one property that
+    actually matters at this layer: IA/EE help is never routed to a full
+    solve/explain path. It refuses and offers the same legitimate
+    substitute the real IA Supervisor would (methodology/structure
+    coaching), rather than silently falling through to a normal EXPLAIN.
+    TODO(Section 11): replace with a real call into the IA Supervisor Agent.
+    """
+    return Action(
+        action_type=ActionType.REFUSE,
+        offer="ia_methodology_coaching",
+        reason="ia_ee_help_routed_to_stub_supervisor",
+    )
+
+
+def _schedule_next_review_item(signals: DecisionSignals) -> Action:
+    """
+    Spec §1.5: `if signals.intent == "exam_prep": return
+    schedule_next_review_item(signals) # spaced repetition, 4.x`.
+
+    The real spaced-repetition scheduler (Adaptive Learning Engine, spec
+    §12 — FSRS scheduling, mastery-threshold bands, due-review queues) is a
+    later phase. Per the decision table's own description of this cell
+    ("question (retrieval-practice style) or explain, chosen by
+    spaced-review scheduler"), Phase 1 falls back to the retrieval-practice
+    question move deterministically rather than building the scheduler.
+    TODO(Section 12): replace with a real call into the Adaptive Learning
+    Engine once FSRS scheduling and mastery persistence exist.
+    """
+    return Action(action_type=ActionType.QUESTION, move="retrieval_practice", reason="exam_prep_stub_scheduler")
 
 
 def decide_pedagogical_action(signals: DecisionSignals) -> Action:
@@ -41,92 +85,91 @@ def decide_pedagogical_action(signals: DecisionSignals) -> Action:
     #    stop. No branch below this block may override a gate.
     # ------------------------------------------------------------------
     if signals.integrity_risk == IntegrityRisk.HIGH:
-        return Action(action_type=ActionType.REFUSE, reason="integrity_risk_high")
+        return Action(action_type=ActionType.REFUSE, offer="concept_explanation", reason="integrity_risk_high")
 
     if signals.assessment_mode == AssessmentMode.LIVE_EXAM_SIMULATION:
-        return Action(action_type=ActionType.REFUSE, reason="live_exam_simulation")
+        return Action(
+            action_type=ActionType.REFUSE, offer="strategy_coaching_only", reason="live_exam_simulation"
+        )
 
     if signals.assessment_mode == AssessmentMode.GRADED_TAKE_HOME and signals.integrity_risk in (
         IntegrityRisk.MEDIUM,
         IntegrityRisk.HIGH,
     ):
-        return Action(action_type=ActionType.REFUSE, reason="graded_take_home_elevated_risk")
+        return Action(
+            action_type=ActionType.REFUSE,
+            offer=["concept_explanation", "analog_practice_problem"],
+            reason="graded_take_home_elevated_risk",
+        )
 
     # ------------------------------------------------------------------
-    # 2. Frustration override. Evaluated after gates (a frustrated
-    #    student mid-exam-integrity-violation still gets refused), but
-    #    before mastery/ladder logic (a frustrated high performer gets
-    #    supported, not challenged).
+    # 2. IA/EE routing — never full ghostwriting, regardless of other
+    #    signals (this check runs before frustration/mastery so an IA
+    #    request never accidentally gets CHALLENGE'd or scaffolded into
+    #    a normal solve path).
     # ------------------------------------------------------------------
-    if signals.frustration_signal:
-        return Action(action_type=ActionType.SUPPORTIVE_SCAFFOLD, reason="frustration_override")
+    if signals.intent == IntentType.IA_EE_HELP:
+        return _route_to_ia_supervisor(signals)
 
     # ------------------------------------------------------------------
-    # 3. Mastery-based shortcut for high performers.
+    # 3. Frustration override: de-escalate hint ladder, protect
+    #    engagement. Only the "high" tier overrides — "mild" does not.
+    # ------------------------------------------------------------------
+    if signals.frustration_signal == FrustrationLevel.HIGH:
+        return Action(
+            action_type=ActionType.SUPPORTIVE_SCAFFOLD,
+            move="worked_example_with_fade",
+            tone="reassuring",
+            reduce_difficulty=True,
+            reason="frustration_override",
+        )
+
+    # ------------------------------------------------------------------
+    # 4. Mastery-based shortcut: high performers get challenge, not
+    #    repetition. Per spec pseudocode this fires only on the FIRST
+    #    attempt at a solve_request (attempt_count == 1) — a student who
+    #    is on their third attempt is not a "high performer on this
+    #    problem" even if their historical mastery estimate is high.
     # ------------------------------------------------------------------
     if (
-        signals.mastery_estimate >= HIGH_MASTERY_THRESHOLD
-        and signals.intent in _MASTERY_SHORTCUT_INTENTS
+        signals.intent == IntentType.SOLVE_REQUEST
+        and signals.mastery_estimate >= HIGH_MASTERY_THRESHOLD
+        and signals.attempt_count == 1
     ):
-        return Action(action_type=ActionType.CHALLENGE, reason="high_mastery_shortcut")
+        return Action(action_type=ActionType.CHALLENGE, move="extension_question", reason="high_mastery_shortcut")
 
     # ------------------------------------------------------------------
-    # 4. Core Socratic hint ladder.
+    # 5. Core Socratic ladder for solve requests.
     #
-    #    attempt_count == 0            -> always start Socratic (a fresh
-    #                                      attempt, regardless of any
-    #                                      stale ladder level).
-    #    hint_ladder_level == 0        -> keep asking Socratic questions.
-    #    0 < hint_ladder_level < MAX   -> hand out the hint at that level.
-    #    hint_ladder_level == MAX      -> final hint + offer full
-    #                                      solution rather than looping
-    #                                      forever.
+    #    attempt_count <= 1        -> diagnostic Socratic question.
+    #    attempt_count in (2, 3)   -> hint, escalating by one level each
+    #                                 time, capped at level 2.
+    #    attempt_count >= 4        -> hint, escalating by one level each
+    #                                 time, capped at the ladder max (4).
     # ------------------------------------------------------------------
-    if signals.intent in _LADDER_INTENTS:
-        if signals.attempt_count == 0:
-            return Action(
-                action_type=ActionType.QUESTION,
-                move="socratic_prompt",
-                reason="first_attempt_socratic",
-            )
-
-        if signals.hint_ladder_level == 0:
-            return Action(
-                action_type=ActionType.QUESTION,
-                move="socratic_prompt",
-                reason="no_hint_yet_continue_socratic",
-            )
-
-        if signals.hint_ladder_level < MAX_HINT_LEVEL:
-            return Action(
-                action_type=ActionType.HINT,
-                level=signals.hint_ladder_level,
-                reason=f"hint_ladder_level_{signals.hint_ladder_level}",
-            )
-
-        return Action(
-            action_type=ActionType.HINT,
-            level=MAX_HINT_LEVEL,
-            offer="offer_full_solution_after_attempt",
-            reason="hint_ladder_exhausted",
-        )
+    if signals.intent == IntentType.SOLVE_REQUEST:
+        if signals.attempt_count <= 1:
+            return Action(action_type=ActionType.QUESTION, move="diagnostic_probe", reason="first_attempt_socratic")
+        if signals.attempt_count in (2, 3):
+            level = min(signals.hint_ladder_level + 1, MID_ATTEMPT_HINT_CAP)
+            return Action(action_type=ActionType.HINT, level=level, reason=f"solve_request_attempt_{signals.attempt_count}")
+        level = min(signals.hint_ladder_level + 1, MAX_HINT_LADDER_LEVEL)
+        return Action(action_type=ActionType.HINT, level=level, reason="solve_request_attempt_4_plus")
 
     # ------------------------------------------------------------------
-    # 5. Fallback branches for non-ladder intents.
+    # 6. Fallback branches for non-ladder intents.
     # ------------------------------------------------------------------
     if signals.intent == IntentType.CHECK_WORK:
-        return Action(action_type=ActionType.EXPLAIN, move="verify_and_explain", reason="check_work_fallback")
+        return Action(action_type=ActionType.EXPLAIN, move="error_localization_explanation", reason="check_work")
 
     if signals.intent == IntentType.CONCEPT_EXPLAIN:
-        return Action(
-            action_type=ActionType.EXPLAIN, move="concept_explanation", reason="concept_explain_fallback"
-        )
+        return Action(action_type=ActionType.EXPLAIN, move="direct_explanation", reason="concept_explain")
 
     if signals.intent == IntentType.EXAM_PREP:
-        return Action(action_type=ActionType.QUESTION, move="practice_question", reason="exam_prep_fallback")
+        return _schedule_next_review_item(signals)
 
     # ------------------------------------------------------------------
-    # 6. Default fallback (e.g. off_topic, or any future intent value
-    #    that isn't explicitly handled above).
+    # 7. Default fallback (general_chat, or any future intent value not
+    #    explicitly handled above).
     # ------------------------------------------------------------------
-    return Action(action_type=ActionType.EXPLAIN, move="redirect_to_subject", reason="default_fallback")
+    return Action(action_type=ActionType.EXPLAIN, move="general_response", reason="default_fallback")

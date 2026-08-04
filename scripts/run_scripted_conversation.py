@@ -28,8 +28,8 @@ def _intent_json(intent: str, assessment_mode_guess: str = "practice") -> str:
         {
             "intent": intent,
             "confidence": 0.9,
-            "subject": "IB DP Math AA",
-            "topic_hint": "product rule",
+            "subject": "math_aa",
+            "topic_hint": "calculus.differentiation.product_rule",
             "assessment_mode_guess": assessment_mode_guess,
             "requires_multimodal_parse": False,
             "language": "en",
@@ -47,15 +47,15 @@ class ScriptedProvider(ProviderClient):
 
 
 SCRIPT = [
-    _intent_json("practice"),
+    _intent_json("solve_request"),
     "What do you notice about the two factors being multiplied here?",
-    _intent_json("practice"),
+    _intent_json("solve_request"),
     "Which rule applies when you're differentiating a product of two functions?",
-    _intent_json("practice"),
+    _intent_json("solve_request"),
     "Try labeling one factor u and the other v, then recall the product rule formula.",
-    _intent_json("practice"),
+    _intent_json("solve_request"),
     "Write out u' and v' separately, then combine them with the product rule.",
-    _intent_json("practice", assessment_mode_guess="live_exam_simulation"),
+    _intent_json("solve_request", assessment_mode_guess="live_exam_simulation"),
     "THIS SHOULD NEVER BE SHOWN — the exam-mode hard gate must refuse before this is reached.",
 ]
 
@@ -81,14 +81,16 @@ async def main() -> None:
             router=router,
             session_store=store,
         )
+        action = blackboard.decision_action
         print(f"--- Turn {i} ---")
         print(f"student: {raw_input}")
-        print(f"intent={blackboard.intent_result.intent.value}  "
-              f"action={blackboard.action.action_type.value}  "
-              f"level={blackboard.action.level}  "
-              f"attempt_count={blackboard.decision_signals.attempt_count}  "
-              f"hint_ladder_level={blackboard.decision_signals.hint_ladder_level}")
-        print(f"tutor: {blackboard.tutor_response.text}")
+        print(
+            f"intent={blackboard.intent_result.intent.value}  "
+            f"action={action.action_type.value}  "
+            f"level={action.level}  "
+            f"move={action.move}"
+        )
+        print(f"tutor: {blackboard.final_response.text}")
         print()
 
 

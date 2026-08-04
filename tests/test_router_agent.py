@@ -21,19 +21,19 @@ class _AlwaysFailsProvider:
 async def test_classify_intent_parses_valid_high_confidence_response():
     router = _router_with_json_response(
         {
-            "intent": "practice",
+            "intent": "solve_request",
             "confidence": 0.92,
-            "subject": "IB DP Math AA",
-            "topic_hint": "differentiation",
+            "subject": "math_aa",
+            "topic_hint": "calculus.differentiation.chain_rule",
             "assessment_mode_guess": "practice",
             "requires_multimodal_parse": False,
             "language": "en",
         }
     )
     result = await classify_intent("can you help me with this derivative problem?", router)
-    assert result.intent == IntentType.PRACTICE
+    assert result.intent == IntentType.SOLVE_REQUEST
     assert result.confidence == 0.92
-    assert result.topic_hint == "differentiation"
+    assert result.topic_hint == "calculus.differentiation.chain_rule"
 
 
 @pytest.mark.asyncio
@@ -42,7 +42,7 @@ async def test_classify_intent_low_confidence_falls_back_to_safe_default():
         {
             "intent": "exam_prep",
             "confidence": 0.3,
-            "subject": "IB DP Math AA",
+            "subject": "math_aa",
             "topic_hint": None,
             "assessment_mode_guess": "graded_take_home",
             "requires_multimodal_parse": False,

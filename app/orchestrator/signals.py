@@ -1,14 +1,14 @@
 """
 Heuristic signal estimators feeding the decision policy.
 
-These are deliberately simple keyword/rule heuristics, not models, and are
-the pieces of the system most likely to be replaced wholesale by later
-phases:
-  - Real integrity risk detection belongs with the grading/examiner agent.
-    TODO(Phase 4): replace with a real academic-integrity signal.
-  - Real mastery estimation requires persisted history across sessions.
-    TODO(Phase 5): replace DEFAULT_MASTERY_ESTIMATE / this stub with a
-    persisted mastery model.
+Per spec §2.2, integrity_risk should come from a dedicated Safety/Integrity
+Agent (fast classifier + rule/keyword lists) and frustration_signal from a
+"Tutor agent sentiment/behavior model" tracking repeated negative replies,
+rapid re-submission, and explicit "I don't get it" x N. Phase 1 implements
+both as small, explicit keyword/rule heuristics rather than trained
+classifiers — deterministic and testable, but a stand-in for the real
+agents. TODO(later phase): replace with the real Safety/Integrity Agent and
+a real frustration-detection model.
 
 Both are pure functions over their inputs, kept separate from the decision
 policy itself so the policy's unit tests stay about branch logic, not
@@ -17,7 +17,7 @@ string matching.
 
 from __future__ import annotations
 
-from app.models.contracts import AssessmentMode, IntegrityRisk
+from app.models.contracts import AssessmentMode, FrustrationLevel, IntegrityRisk, SafetyResult
 
 # TODO(Phase 5): source from a persisted per-student mastery model instead
 # of a flat neutral prior. Callers that already have a real estimate (e.g.
@@ -32,6 +32,8 @@ _HIGH_RISK_PHRASES = (
     "solve it for me completely",
     "just solve it",
     "give me the solution",
+    "don't tell my teacher",
+    "dont tell my teacher",
 )
 
 _MEDIUM_RISK_PHRASES = (
@@ -39,45 +41,53 @@ _MEDIUM_RISK_PHRASES = (
     "whats the answer",
     "can you just tell me",
     "skip to the answer",
+    "due tomorrow",
 )
 
-_FRUSTRATION_MARKERS = (
+_HIGH_FRUSTRATION_MARKERS = (
+    "i give up",
+    "this is stupid",
+    "i hate this",
+    "i can't do this",
+    "i cant do this",
+    "forget it",
+    "whatever, i don't care",
+)
+
+_MILD_FRUSTRATION_MARKERS = (
     "i don't get it",
     "i dont get it",
     "this is so hard",
-    "i give up",
     "i'm so confused",
     "im so confused",
     "ugh",
-    "this is stupid",
-    "i hate this",
     "so frustrated",
-    "i can't do this",
-    "i cant do this",
+    "still don't get it",
+    "still dont get it",
 )
 
 
-def estimate_integrity_risk(raw_input: str, assessment_mode: AssessmentMode) -> IntegrityRisk:
+def estimate_safety_result(raw_input: str, assessment_mode: AssessmentMode) -> SafetyResult:
     lowered = raw_input.lower()
     high_risk_request = any(phrase in lowered for phrase in _HIGH_RISK_PHRASES)
     medium_risk_request = any(phrase in lowered for phrase in _MEDIUM_RISK_PHRASES)
 
-    if assessment_mode == AssessmentMode.LIVE_EXAM_SIMULATION:
-        # The hard gate on assessment_mode alone (in the decision policy)
-        # already refuses live exams; risk is reported as at least medium
-        # here for observability/logging even though it isn't what trips
-        # the gate.
-        return IntegrityRisk.HIGH if high_risk_request else IntegrityRisk.MEDIUM
+    if assessment_mode == AssessmentMode.GRADED_TAKE_HOME and high_risk_request:
+        risk = IntegrityRisk.HIGH
+    elif high_risk_request:
+        risk = IntegrityRisk.MEDIUM
+    elif medium_risk_request:
+        risk = IntegrityRisk.MEDIUM
+    else:
+        risk = IntegrityRisk.LOW
 
-    if high_risk_request:
-        return IntegrityRisk.HIGH if assessment_mode == AssessmentMode.GRADED_TAKE_HOME else IntegrityRisk.MEDIUM
-
-    if medium_risk_request:
-        return IntegrityRisk.MEDIUM
-
-    return IntegrityRisk.NONE
+    return SafetyResult(integrity_risk=risk, action_required=risk == IntegrityRisk.HIGH)
 
 
-def estimate_frustration(raw_input: str) -> bool:
+def estimate_frustration(raw_input: str) -> FrustrationLevel:
     lowered = raw_input.lower()
-    return any(marker in lowered for marker in _FRUSTRATION_MARKERS)
+    if any(marker in lowered for marker in _HIGH_FRUSTRATION_MARKERS):
+        return FrustrationLevel.HIGH
+    if any(marker in lowered for marker in _MILD_FRUSTRATION_MARKERS):
+        return FrustrationLevel.MILD
+    return FrustrationLevel.NONE

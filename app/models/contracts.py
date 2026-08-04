@@ -1,6 +1,14 @@
 """
 Typed contracts shared across the orchestrator, agents, and policy layer.
 
+Field names and enum values are pinned to the engineering spec (IB Mathematics
+AA — AI-Native Academic Assistant, Engineering Blueprint v1.0), specifically:
+  - IntentResult:      spec §2.2, Router/Intent Agent
+  - DecisionSignals:    spec §1.5, signal table
+  - Action:             spec §1.5, decision-policy pseudocode (Action.* calls)
+  - TutorResponse:      spec §2.2, Tutor/Teaching Agent output
+  - Blackboard:         spec §2.5, Shared Blackboard / State Object Schema
+
 These are the load-bearing data shapes of the system. Every boundary between
 components (Router -> Orchestrator -> Policy -> Tutor agent) passes one of
 these types, never a raw dict and never a free-form string, so a malformed
@@ -10,37 +18,44 @@ prompt text or business logic.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 from pydantic import BaseModel, Field
 
 
 # ---------------------------------------------------------------------------
-# Shared enums
+# Shared enums (values pinned to spec §1.5 / §2.2 signal & schema tables)
 # ---------------------------------------------------------------------------
 
 
 class IntentType(str, Enum):
-    CONCEPT_EXPLAIN = "concept_explain"
-    PRACTICE = "practice"
+    SOLVE_REQUEST = "solve_request"
     CHECK_WORK = "check_work"
+    CONCEPT_EXPLAIN = "concept_explain"
     EXAM_PREP = "exam_prep"
-    HINT_REQUEST = "hint_request"
-    OFF_TOPIC = "off_topic"
+    IA_EE_HELP = "ia_ee_help"
+    GENERAL_CHAT = "general_chat"
 
 
 class AssessmentMode(str, Enum):
     PRACTICE = "practice"
+    HOMEWORK_UNGRADED = "homework_ungraded"
     GRADED_TAKE_HOME = "graded_take_home"
     LIVE_EXAM_SIMULATION = "live_exam_simulation"
-    NONE = "none"
+    IA_EE = "ia_ee"
 
 
 class IntegrityRisk(str, Enum):
-    NONE = "none"
     LOW = "low"
     MEDIUM = "medium"
+    HIGH = "high"
+
+
+class FrustrationLevel(str, Enum):
+    NONE = "none"
+    MILD = "mild"
     HIGH = "high"
 
 
@@ -53,8 +68,11 @@ class ActionType(str, Enum):
     SUPPORTIVE_SCAFFOLD = "supportive_scaffold"
 
 
+MAX_HINT_LADDER_LEVEL = 4
+
+
 # ---------------------------------------------------------------------------
-# Router / Intent agent output
+# Router / Intent agent output (spec §2.2)
 # ---------------------------------------------------------------------------
 
 
@@ -63,15 +81,15 @@ class IntentResult(BaseModel):
 
     intent: IntentType
     confidence: float = Field(ge=0.0, le=1.0)
-    subject: str
+    subject: str = "math_aa"
     topic_hint: Optional[str] = None
-    assessment_mode_guess: AssessmentMode = AssessmentMode.NONE
+    assessment_mode_guess: AssessmentMode = AssessmentMode.PRACTICE
     requires_multimodal_parse: bool = False
     language: str = "en"
 
 
 # ---------------------------------------------------------------------------
-# Decision policy input/output
+# Decision policy input/output (spec §1.5)
 # ---------------------------------------------------------------------------
 
 
@@ -89,30 +107,46 @@ class DecisionSignals(BaseModel):
     assessment_mode: AssessmentMode
     integrity_risk: IntegrityRisk
     attempt_count: int = Field(ge=0)
-    frustration_signal: bool
-    hint_ladder_level: int = Field(ge=0, le=4)
+    frustration_signal: FrustrationLevel
+    hint_ladder_level: int = Field(ge=0, le=MAX_HINT_LADDER_LEVEL)
 
 
 class Action(BaseModel):
     """
-    The binding contract handed to the Tutor agent. The agent MUST NOT
-    deviate from action_type/level — that is enforced structurally in
+    The binding contract handed to the Tutor agent. Per spec §1.5: "its
+    output (Action) is the binding contract passed to the Tutor agent's
+    generation call — the Tutor agent cannot override the action type, only
+    the content within it." That structural guarantee is enforced in
     app/agents/tutor_agent.py, not merely requested via prompt wording.
+
+    `offer` may be a single string (e.g. "concept_explanation") or a list
+    of alternatives (e.g. ["concept_explanation", "analog_practice_problem"])
+    per the spec's REFUSE(offer=...) calls. `tone` / `reduce_difficulty` are
+    only meaningful on SUPPORTIVE_SCAFFOLD actions.
+
+    `reason` is an engineering addition beyond the spec (not in the
+    Action.* calls) kept for observability/testability — every branch of
+    the policy tags why it fired, which costs nothing and makes the pure
+    function's behavior auditable in logs and tests.
     """
 
     action_type: ActionType
     move: Optional[str] = None
-    level: Optional[int] = Field(default=None, ge=0, le=4)
-    offer: Optional[str] = None
+    level: Optional[int] = Field(default=None, ge=1, le=MAX_HINT_LADDER_LEVEL)
+    offer: Optional[Union[str, list[str]]] = None
+    tone: Optional[str] = None
+    reduce_difficulty: Optional[bool] = None
     reason: str = Field(min_length=1)
 
     def model_post_init(self, __context: Any) -> None:
         if self.action_type == ActionType.HINT and self.level is None:
-            raise ValueError("HINT actions must carry an explicit level (0-4)")
+            raise ValueError("HINT actions must carry an explicit level (1-4)")
+        if self.action_type != ActionType.HINT and self.level is not None:
+            raise ValueError("level is only meaningful on HINT actions")
 
 
 # ---------------------------------------------------------------------------
-# Tutor agent output
+# Tutor agent output (spec §2.2)
 # ---------------------------------------------------------------------------
 
 
@@ -123,33 +157,75 @@ class TutorResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Blackboard: shared per-turn state object
+# Safety/Integrity agent output (spec §2.2) — Phase 1 implements this via a
+# small keyword heuristic (app/orchestrator/signals.py), not a trained
+# classifier. TODO(later phase): replace with the real Safety/Integrity agent.
 # ---------------------------------------------------------------------------
+
+
+class SafetyResult(BaseModel):
+    integrity_risk: IntegrityRisk
+    pii_flags: list[str] = Field(default_factory=list)
+    content_safety_flags: list[str] = Field(default_factory=list)
+    action_required: bool = False
+
+
+# ---------------------------------------------------------------------------
+# Blackboard: shared per-turn state object (spec §2.5)
+# ---------------------------------------------------------------------------
+
+
+class RawInput(BaseModel):
+    text: str
+    attachments: list[str] = Field(default_factory=list)
+
+
+class NormalizedInput(BaseModel):
+    text: str
+    # TODO(Phase 2/7): populated by the multimodal/CAS-expression pipeline.
+    expression_trees: list[str] = Field(default_factory=list)
+    # TODO(Phase 7): populated by the math-OCR pipeline (§3.2) for image input.
+    ocr_confidence: Optional[float] = None
 
 
 class Blackboard(BaseModel):
     """
-    Shared state object threaded through a single turn's processing.
-
-    Only Phase 1-relevant fields are populated. Fields owned by later
-    phases are declared as typed-but-unused stubs so downstream code can
-    already reference the eventual shape without rework.
+    Shared state object threaded through a single turn's processing,
+    matching the field names of spec §2.5 exactly so later phases can
+    populate the fields Phase 1 leaves as stubs without a rename.
     """
 
+    turn_id: str
     session_id: str
     student_id: str
-    problem_id: Optional[str] = None
-    raw_input: str
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    raw_input: RawInput
+    normalized_input: Optional[NormalizedInput] = None
 
     intent_result: Optional[IntentResult] = None
-    decision_signals: Optional[DecisionSignals] = None
-    action: Optional[Action] = None
-    tutor_response: Optional[TutorResponse] = None
+    safety_result: Optional[SafetyResult] = None
 
-    # TODO(Phase 2): populated by the retrieval agent against the curriculum
-    # knowledge base. Left as None/empty in Phase 1 — no retrieval exists yet.
+    # TODO(Phase 5): LearnerModel summary loaded by the Memory agent.
+    student_state_snapshot: Optional[dict[str, Any]] = None
+    # TODO: Planner agent isn't built in Phase 1 — the orchestrator runs a
+    # fixed linear sequence instead of a Planner-produced stage graph.
+    execution_plan: Optional[dict[str, Any]] = None
+    # TODO(Phase 2): populated by the Retriever agent against the curriculum
+    # knowledge base. Left as None in Phase 1 — no retrieval exists yet.
     retrieved_chunks: Optional[list[Any]] = None
-
-    # TODO(Phase 2): populated by the CAS/SymPy verification service when a
-    # student submits a symbolic/numeric answer for correctness checking.
+    # TODO(Phase 2): populated by the Math Solver + CAS agent.
     cas_result: Optional[dict[str, Any]] = None
+    # TODO(later phase): populated by the Misconception Diagnostician agent.
+    diagnosis_result: Optional[dict[str, Any]] = None
+
+    decision_action: Optional[Action] = None
+    draft_response: Optional[TutorResponse] = None
+    # TODO: full Verifier/Critic agent is a later phase; Phase 1 approximates
+    # its no-leak check with a structural regex gate inside tutor_agent.py.
+    critique_result: Optional[dict[str, Any]] = None
+    final_response: Optional[TutorResponse] = None
+
+    # TODO(Phase 5): async memory write-back queue.
+    memory_writes_pending: list[dict[str, Any]] = Field(default_factory=list)
+    trace: dict[str, Any] = Field(default_factory=dict)

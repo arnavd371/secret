@@ -66,10 +66,10 @@ async def turn(request: TurnRequest) -> StreamingResponse:
     )
 
     async def _stream():
-        assert blackboard.tutor_response is not None
+        assert blackboard.final_response is not None
         for chunk in [
-            blackboard.tutor_response.text[i : i + 40]
-            for i in range(0, len(blackboard.tutor_response.text), 40)
+            blackboard.final_response.text[i : i + 40]
+            for i in range(0, len(blackboard.final_response.text), 40)
         ]:
             yield chunk
 

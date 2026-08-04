@@ -1,11 +1,14 @@
 """
-Router/Intent agent: one small/fast model call that classifies the incoming
-turn into a structured IntentResult.
+Router/Intent agent (spec §2.2): one small/fast model call that classifies
+the incoming turn into a structured IntentResult.
 
 The confidence<0.6 fallback is implemented as real code below — the model
 is never trusted to "know" it's uncertain and behave accordingly on its own.
-If the call fails outright (timeout, provider error) or returns something
-that doesn't parse into IntentResult, we fall back the same way.
+Per spec: "On low-confidence classification (confidence < 0.6), default to
+concept_explain intent with assessment_mode=practice (safest,
+least-invasive default) and flag for human-review sampling." If the call
+fails outright (timeout, provider error) or returns something that doesn't
+parse into IntentResult, we fall back the same way.
 """
 
 from __future__ import annotations
@@ -24,22 +27,22 @@ logger = logging.getLogger(__name__)
 
 # Below this confidence the classification is not trusted, and we fall back
 # to the safe default action-set rather than let a low-confidence guess
-# drive the decision policy.
+# drive the decision policy. Value pinned to spec §2.2.
 LOW_CONFIDENCE_THRESHOLD = 0.6
 
-_DEFAULT_SUBJECT = "IB DP Math AA"
+_DEFAULT_SUBJECT = "math_aa"
 
 _INTENT_SYSTEM_PROMPT = """You are an intent classifier for a math tutoring \
 assistant. Read the student's message and respond with ONLY a JSON object \
 (no prose, no markdown fences) with exactly these keys:
 
-  intent: one of "concept_explain", "practice", "check_work", "exam_prep", \
-"hint_request", "off_topic"
+  intent: one of "solve_request", "check_work", "concept_explain", \
+"exam_prep", "ia_ee_help", "general_chat"
   confidence: float between 0 and 1
-  subject: string, e.g. "IB DP Math AA"
-  topic_hint: string or null, e.g. "differentiation"
-  assessment_mode_guess: one of "practice", "graded_take_home", \
-"live_exam_simulation", "none"
+  subject: string, e.g. "math_aa"
+  topic_hint: string or null, e.g. "calculus.differentiation.chain_rule"
+  assessment_mode_guess: one of "practice", "homework_ungraded", \
+"graded_take_home", "live_exam_simulation", "ia_ee"
   requires_multimodal_parse: boolean, true if the message references an \
 image/photo/scan of work
   language: ISO 639-1 code, e.g. "en"
