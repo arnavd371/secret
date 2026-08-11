@@ -1,6 +1,6 @@
-# AI Tutor - Phases 1-8: Reasoning Core, Verification/Retrieval, Question Generation, Grading, Memory, Quality Control, Multimodal Ingestion, Misconception Diagnosis
+# AI Tutor - Phases 1-9: Reasoning Core, Verification/Retrieval, Question Generation, Grading, Memory, Quality Control, Multimodal Ingestion, Misconception Diagnosis, Adaptive Learning
 
-The intelligence layer for an AI-native IB DP Math AA tutoring assistant, built to the Engineering Blueprint v1.0 spec. Covers Phase 1 (reasoning core), Phase 2 (CAS verification + retrieval), Phase 3 (question generation), Phase 4 (grading / AI examiner), Phase 5 (student memory system), Phase 6 (AI quality control), Phase 7 (multimodal ingestion), and Phase 8 (misconception diagnosis).
+The intelligence layer for an AI-native IB DP Math AA tutoring assistant, built to the Engineering Blueprint v1.0 spec. Covers Phase 1 (reasoning core), Phase 2 (CAS verification + retrieval), Phase 3 (question generation), Phase 4 (grading / AI examiner), Phase 5 (student memory system), Phase 6 (AI quality control), Phase 7 (multimodal ingestion), Phase 8 (misconception diagnosis), and Phase 9 (adaptive learning / spaced repetition).
 
 ## What this does
 
@@ -64,7 +64,14 @@ Phase 8, misconception diagnosis, runs whenever a check_work submission (typed o
 - Writes a confirmed diagnosis into the same per-student misconception registry Phase 5 already built and decays over time; a repeat diagnosis increments the existing entry instead of duplicating it.
 - Closes the loop Phase 5 left open: the very next turn's memory context assembly (already real since Phase 5) automatically surfaces the misconception in the Tutor prompt's ACTIVE MISCONCEPTIONS slot, with no additional wiring needed.
 
-Not built yet: real curriculum/template content beyond the seed set, the full spec §8.2 misconception catalog (this build covers four named errors with real detection behind them, not the whole syllabus), per-node solution-graph diagnosis for errors that aren't a clean pattern match, IA supervisor, adaptive learning engine, multi-page PDF or HEIC image intake (PNG/JPEG only), a specialized math-OCR service (a general vision-capable model is used instead, the documented fallback per spec), expression parsing for matrices/integrals-with-limits/piecewise notation, dense/vector retrieval, a reranker, LLM-authored item variants, IRT recalibration from response history, grade-boundary calibration from historical exam data, human-in-the-loop review/appeals, memory consolidation batch jobs, GDPR export/erasure workflows, self-consistency multi-sampling (the CAS/mark-scheme verification this system already has is a stronger deterministic guarantee for the claims that matter, so this was a considered tradeoff, not an oversight), offline eval harness, online guardrail metrics, regression gating, shadow evaluation. These are stubbed with TODOs pointing at the relevant spec section.
+Phase 9, adaptive learning, maintains a real spaced-repetition schedule per (student, subtopic) and drives exam_prep:
+
+- A real FSRS-lite forgetting-curve model: a stability/difficulty state per subtopic, a retrievability curve that decays over time, and review updates that grow stability on a correct review (more so for a harder item or one recalled after a longer gap) and shrink it on an incorrect one, raising difficulty. Uses fixed, documented parameters rather than the published algorithm's per-user ML-fitted weights, which need training data this system doesn't have, the same honest-simplification posture as Phase 5's BKT/IRT defaults.
+- Every graded check_work submission, typed or photographed, updates this schedule for its subtopic, independent of and in addition to Phase 5's mastery update.
+- On exam_prep, a real due-review query decides the action for real instead of an unconditional stub: something genuinely overdue gets a retrieval-practice question bound to a real, CAS-verified generated item for that exact subtopic (reusing Phase 3's generator, the same way CHALLENGE does); nothing due gets a plain explanation instead of manufacturing a quiz out of nothing.
+- The bound review item's answer is protected by the same structural leak check as a CHALLENGE item, extended to cover QUESTION drafts too.
+
+Not built yet: real curriculum/template content beyond the seed set, the full spec §8.2 misconception catalog (this build covers four named errors with real detection behind them, not the whole syllabus), per-node solution-graph diagnosis for errors that aren't a clean pattern match, the published FSRS algorithm's per-user ML-fitted weights (fixed illustrative parameters are used instead, see Phase 9 above), mastery-threshold review bands beyond a single due/not-due queue, IA supervisor, multi-page PDF or HEIC image intake (PNG/JPEG only), a specialized math-OCR service (a general vision-capable model is used instead, the documented fallback per spec), expression parsing for matrices/integrals-with-limits/piecewise notation, dense/vector retrieval, a reranker, LLM-authored item variants, IRT recalibration from response history, grade-boundary calibration from historical exam data, human-in-the-loop review/appeals, memory consolidation batch jobs, GDPR export/erasure workflows, self-consistency multi-sampling (the CAS/mark-scheme verification this system already has is a stronger deterministic guarantee for the claims that matter, so this was a considered tradeoff, not an oversight), offline eval harness, online guardrail metrics, regression gating, shadow evaluation. These are stubbed with TODOs pointing at the relevant spec section.
 
 ## Structure
 
@@ -81,6 +88,7 @@ app/
   verifier/                 Verifier/Critic checklist agent, grounding entailment check
   multimodal/               image intake validation, PIL preprocessing, math_ocr call, LaTeX normalization, confidence gating
   diagnostician/            misconception catalog, SymPy pattern detectors, model-inference fallback, write policy
+  adaptive/                 FSRS-lite scheduling math, review state store, due-review queue
   llm/                      model router: one config file for all model names, one call() entrypoint
   session/state.py          hint ladder session state
   orchestrator/             wires everything together into handle_turn()
@@ -97,13 +105,13 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Run the tests (299 tests, all mocked at the model boundary, no API key or network needed; SymPy, retrieval, item generation, grading, memory math, the grounding check, the multimodal preprocessing/normalization/confidence math, and the misconception pattern detectors all run for real):
+Run the tests (332 tests, all mocked at the model boundary, no API key or network needed; SymPy, retrieval, item generation, grading, memory math, the grounding check, the multimodal preprocessing/normalization/confidence math, the misconception pattern detectors, and the FSRS scheduling math all run for real):
 
 ```bash
 pytest -q
 ```
 
-Run the scripted demo conversation (shows real mastery climb from three gradings driving a later CHALLENGE decision with no override, a `critique:` line per turn confirming the Verifier/Critic and grounding check ran, an `ingestion:` line for a photographed submission showing the real intake/preprocessing/confidence pipeline running before grading, and a `diagnosis:` line for a wrong submission showing the misconception it was pattern-matched to, which then appears in the very next turn's `memory:` line):
+Run the scripted demo conversation (shows real mastery climb from three gradings driving a later CHALLENGE decision with no override, a `critique:` line per turn confirming the Verifier/Critic and grounding check ran, an `ingestion:` line for a photographed submission showing the real intake/preprocessing/confidence pipeline running before grading, a `diagnosis:` line for a wrong submission showing the misconception it was pattern-matched to, which then appears in the very next turn's `memory:` line, and an exam_prep turn whose `reason=exam_prep_review_due` and generated item come from a real, pre-seeded-overdue FSRS schedule):
 
 ```bash
 python scripts/run_scripted_conversation.py

@@ -65,18 +65,24 @@ def _route_to_ia_supervisor(signals: DecisionSignals) -> Action:
 def _schedule_next_review_item(signals: DecisionSignals) -> Action:
     """
     Spec §1.5: `if signals.intent == "exam_prep": return
-    schedule_next_review_item(signals) # spaced repetition, 4.x`.
+    schedule_next_review_item(signals) # spaced repetition, 4.x`, and the
+    decision table's own description of this cell: "question
+    (retrieval-practice style) or explain, chosen by spaced-review
+    scheduler."
 
-    The real spaced-repetition scheduler (Adaptive Learning Engine, spec
-    §12 — FSRS scheduling, mastery-threshold bands, due-review queues) is a
-    later phase. Per the decision table's own description of this cell
-    ("question (retrieval-practice style) or explain, chosen by
-    spaced-review scheduler"), Phase 1 falls back to the retrieval-practice
-    question move deterministically rather than building the scheduler.
-    TODO(Section 12): replace with a real call into the Adaptive Learning
-    Engine once FSRS scheduling and mastery persistence exist.
+    `signals.has_due_review` is the real signal, resolved by the
+    orchestrator from the Adaptive Learning Engine's FSRS-based due-review
+    queue (app/adaptive/scheduler.py, spec §12) before this pure function
+    ever runs. When something is genuinely due, retrieval practice is the
+    right move — actively recalling a decaying item is exactly what spaced
+    repetition is for. When nothing is due (nothing has entered the
+    review cycle yet, or everything is still comfortably within its
+    interval), quizzing the student on a term serves no one — a general
+    explanation/orientation response is the honest fallback instead.
     """
-    return Action(action_type=ActionType.QUESTION, move="retrieval_practice", reason="exam_prep_stub_scheduler")
+    if signals.has_due_review:
+        return Action(action_type=ActionType.QUESTION, move="retrieval_practice", reason="exam_prep_review_due")
+    return Action(action_type=ActionType.EXPLAIN, move="general_response", reason="exam_prep_no_review_due")
 
 
 def decide_pedagogical_action(signals: DecisionSignals) -> Action:

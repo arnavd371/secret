@@ -14,15 +14,18 @@ depend on the model having listened.
 
 RETRIEVED CURRICULUM CONTEXT and CAS-VERIFIED RESULT are real when Phase 2's
 Retriever/CAS agents found something for this turn; EXTENSION ITEM is real
-when Phase 3's Question Generation Engine produced a CAS-verified item for
-a CHALLENGE action; STUDENT MASTERY CONTEXT / ACTIVE MISCONCEPTIONS are real
-when Phase 5's Memory Agent has a persisted record for the turn's subtopic.
-When any of them didn't apply this turn, the slot says so explicitly rather
-than being silently blank, so the model is told not to assert unsupported
-claims or invent its own extension question. Automatic misconception
-*detection* remains a later-phase non-goal (§8's Misconception
-Diagnostician) — ACTIVE MISCONCEPTIONS only ever reflects what was
-explicitly recorded, never something inferred by the Tutor agent itself.
+when Phase 3's Question Generation Engine produced a CAS-verified item —
+for a CHALLENGE action (a harder problem for a high-mastery student), or
+for a QUESTION/retrieval_practice action bound to a real due-for-review
+subtopic (Phase 9's Adaptive Learning Engine, spec §12); STUDENT MASTERY
+CONTEXT / ACTIVE MISCONCEPTIONS are real when Phase 5's Memory Agent has a
+persisted record for the turn's subtopic. When any of them didn't apply
+this turn, the slot says so explicitly rather than being silently blank,
+so the model is told not to assert unsupported claims or invent its own
+extension question. The item's answer is protected the same way
+regardless of which action bound it: tutor_agent.py's structural leak
+check covers both CHALLENGE and QUESTION drafts that state the bound
+item's own verified answer.
 """
 
 from __future__ import annotations

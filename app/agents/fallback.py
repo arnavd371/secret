@@ -94,7 +94,10 @@ def get_fallback_response(action: Action, *, challenge_item: Optional[GeneratedI
         level = action.level if action.level is not None else 1
         text = _HINT_FALLBACKS.get(level, _HINT_FALLBACKS[1])
     elif action.action_type == ActionType.QUESTION:
-        text = _QUESTION_FALLBACKS.get(action.move or "", _QUESTION_FALLBACKS["diagnostic_probe"])
+        if action.move == "retrieval_practice" and challenge_item is not None:
+            text = _describe_review_item(challenge_item)
+        else:
+            text = _QUESTION_FALLBACKS.get(action.move or "", _QUESTION_FALLBACKS["diagnostic_probe"])
     elif action.action_type == ActionType.EXPLAIN:
         text = _EXPLAIN_FALLBACKS.get(action.move or "", _EXPLAIN_FALLBACKS["general_response"])
     elif action.action_type == ActionType.CHALLENGE:
@@ -117,6 +120,16 @@ def _describe_challenge_item(item: GeneratedItem) -> str:
     return (
         "You've got a solid handle on this — here's a harder one to try: "
         f"{item.rendered_stem} Give it a go, and let me know what you get."
+    )
+
+
+def _describe_review_item(item: GeneratedItem) -> str:
+    """Same safety property as _describe_challenge_item (the item's own
+    answer is never stated), different framing: this is spaced-repetition
+    retrieval practice (Phase 9), not a harder extension problem."""
+    return (
+        f"This one's due for review: {item.rendered_stem} "
+        "Try it from memory before checking your work."
     )
 
 

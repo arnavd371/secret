@@ -41,6 +41,17 @@ The orchestrator still runs a fixed linear sequence rather than the
 Planner's parallel stage graph (spec §6) — the Planner agent remains a
 later-phase non-goal (see the TODO on Blackboard.execution_plan in
 app/models/contracts.py).
+
+Adaptive Learning Engine (Phase 9, spec §12): on an exam_prep turn, the
+real FSRS due-review queue (app.adaptive.scheduler) is consulted before
+the decision policy runs, resolving DecisionSignals.has_due_review for
+real rather than leaving it at its default. When something is due, a
+real practice item is generated for that exact subtopic via the same
+Question Generation Engine CHALLENGE already uses, and bound to the
+QUESTION action the same way an extension item is bound to CHALLENGE.
+Every graded check_work submission (typed or photographed) also updates
+FSRS state for its subtopic, same hook point as Phase 5's mastery write
+and Phase 8's misconception write.
 """
 
 from __future__ import annotations
@@ -50,6 +61,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
+from app.adaptive.scheduler import most_overdue_subtopic, record_review
+from app.adaptive.store import ReviewStateStore, get_default_review_state_store
 from app.agents import router_agent, tutor_agent
 from app.agents.fallback import build_multimodal_confirmation_response, build_refusal_response
 from app.cas.extraction import MathTask, extract_math_task
@@ -218,6 +231,7 @@ async def handle_turn(
     session_store: Optional[SessionStateStore] = None,
     knowledge_base: Optional[KnowledgeBase] = None,
     memory_store: Optional[MemoryStore] = None,
+    review_store: Optional[ReviewStateStore] = None,
     mastery_estimate: Optional[float] = None,
     student_work: Optional[str] = None,
     student_work_image: Optional[bytes] = None,
@@ -252,6 +266,7 @@ async def handle_turn(
     session_store = session_store or InMemorySessionStateStore()
     knowledge_base = knowledge_base or get_default_knowledge_base()
     memory_store = memory_store or get_default_memory_store()
+    review_store = review_store or get_default_review_state_store()
 
     blackboard = Blackboard(
         turn_id=str(uuid.uuid4()),
@@ -282,6 +297,13 @@ async def handle_turn(
         ProblemSessionState(session_id=session_id, problem_id=problem_id) if problem_changed else prev_state
     )
 
+    # Adaptive Learning Engine (Phase 9, spec §12): resolved here, before
+    # the pure decision policy runs, exactly like mastery_estimate above —
+    # decide_pedagogical_action never touches a store directly.
+    due_subtopic_id: Optional[str] = None
+    if intent_result.intent == IntentType.EXAM_PREP:
+        due_subtopic_id = await most_overdue_subtopic(review_store, student_id)
+
     signals = DecisionSignals(
         intent=intent_result.intent,
         mastery_estimate=resolved_mastery_estimate,
@@ -290,6 +312,7 @@ async def handle_turn(
         attempt_count=current_state.attempt_count,
         frustration_signal=estimate_frustration(raw_input),
         hint_ladder_level=current_state.hint_ladder_level,
+        has_due_review=due_subtopic_id is not None,
     )
 
     action = decide_pedagogical_action(signals)
@@ -327,6 +350,15 @@ async def handle_turn(
             mark_result, math_task, cas_result = grading
             blackboard.mark_result = mark_result
             await _write_mastery_from_grading(student_id, intent_result.topic_hint, mark_result, memory_store)
+            # Adaptive Learning Engine (Phase 9): every graded attempt is a
+            # real spaced-repetition review, regardless of the grading's
+            # own confidence tier — unlike the mastery write above, this
+            # isn't gated on confidence, since the review itself genuinely
+            # happened even when extracting a clean mark from it didn't
+            # go perfectly.
+            if intent_result.topic_hint:
+                correct = mark_result.total_available > 0 and mark_result.total_awarded == mark_result.total_available
+                await record_review(review_store, student_id, intent_result.topic_hint, correct)
 
             response_text = mark_result.comment
             # Misconception Diagnostician (Phase 8, spec §8): only worth
@@ -367,6 +399,12 @@ async def handle_turn(
         blackboard.retrieved_chunks = retrieved_chunks
     elif action.action_type == ActionType.CHALLENGE:
         challenge_item = await _generate_challenge_item(intent_result.topic_hint)
+        blackboard.generated_item = challenge_item
+    elif action.action_type == ActionType.QUESTION and action.move == "retrieval_practice" and due_subtopic_id is not None:
+        # Phase 9: a real spaced-repetition item for the actual due
+        # subtopic, reusing Phase 3's CAS-verified generator rather than
+        # inventing a separate item source for review practice.
+        challenge_item = await _generate_challenge_item(due_subtopic_id)
         blackboard.generated_item = challenge_item
 
     response = await tutor_agent.generate(

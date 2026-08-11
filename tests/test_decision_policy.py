@@ -246,10 +246,18 @@ def test_concept_explain_falls_back_to_direct_explanation():
     assert action.move == "direct_explanation"
 
 
-def test_exam_prep_falls_back_to_retrieval_practice_question():
-    action = decide_pedagogical_action(_signals(intent=IntentType.EXAM_PREP))
+def test_exam_prep_with_a_due_review_asks_a_retrieval_practice_question():
+    action = decide_pedagogical_action(_signals(intent=IntentType.EXAM_PREP, has_due_review=True))
     assert action.action_type == ActionType.QUESTION
     assert action.move == "retrieval_practice"
+    assert action.reason == "exam_prep_review_due"
+
+
+def test_exam_prep_with_nothing_due_falls_back_to_a_general_explanation():
+    action = decide_pedagogical_action(_signals(intent=IntentType.EXAM_PREP, has_due_review=False))
+    assert action.action_type == ActionType.EXPLAIN
+    assert action.move == "general_response"
+    assert action.reason == "exam_prep_no_review_due"
 
 
 # ---------------------------------------------------------------------------

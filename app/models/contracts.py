@@ -117,6 +117,12 @@ class DecisionSignals(BaseModel):
     attempt_count: int = Field(ge=0)
     frustration_signal: FrustrationLevel
     hint_ladder_level: int = Field(ge=0, le=MAX_HINT_LADDER_LEVEL)
+    # Resolved by the orchestrator from the Adaptive Learning Engine's
+    # real due-review queue (app/adaptive/scheduler.py, spec §12) before
+    # the decision policy runs — the policy itself stays I/O-free, same
+    # convention as mastery_estimate being pre-resolved from Phase 5's
+    # memory read rather than the policy touching the store directly.
+    has_due_review: bool = False
 
 
 class Action(BaseModel):

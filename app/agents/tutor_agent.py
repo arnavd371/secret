@@ -105,9 +105,12 @@ def _violates_action_contract(draft: str, action: Action, challenge_item: Option
         return False
     if any(pattern.search(draft) for pattern in _LEAK_PATTERNS):
         return True
-    # A CHALLENGE draft that states the generated item's own verified
-    # answer is just as much a leak as matching the generic patterns above.
-    if action.action_type == ActionType.CHALLENGE and challenge_item is not None:
+    # A draft that states the bound item's own verified answer is just as
+    # much a leak as matching the generic patterns above — true for a
+    # CHALLENGE item (Phase 3) and equally true for a QUESTION bound to a
+    # real spaced-repetition review item (Phase 9): either way, the
+    # item's own answer must never appear in what's shown to the student.
+    if action.action_type in (ActionType.CHALLENGE, ActionType.QUESTION) and challenge_item is not None:
         answer_fragment = challenge_item.correct_answer.value.strip()
         if answer_fragment and answer_fragment in draft:
             return True

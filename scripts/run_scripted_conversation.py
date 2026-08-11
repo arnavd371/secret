@@ -1,5 +1,5 @@
 """
-Runnable demo of the reasoning core through Phase 8: a scripted, multi-turn
+Runnable demo of the reasoning core through Phase 9: a scripted, multi-turn
 conversation through `handle_turn`, with a mocked model provider so it runs
 with no API key and no network access. The Router/Intent classification,
 Tutor generation, and math_ocr transcription calls are mocked; the decision
@@ -10,15 +10,18 @@ alignment + mark awarding), memory (real BKT/IRT mastery updates, decay,
 and budgeted context assembly), the Verifier/Critic + grounding check
 (Phase 6), the multimodal ingestion pipeline (Phase 7: real intake
 validation, real PIL preprocessing, real LaTeX normalization/expression-
-parsing/confidence scoring), and the Misconception Diagnostician (Phase 8:
+parsing/confidence scoring), the Misconception Diagnostician (Phase 8:
 real SymPy pattern detection against the actual problem, written straight
-into the same memory registry Phase 5 already reads from) all run for real
-on every turn — this script's mocked provider auto-passes the critic's
-checklist call so the narrative isn't interrupted by it, but the
-"critique" line printed per turn shows it genuinely ran. Explicit
-block/revise/regenerate scenarios are covered in
-tests/test_integration_critic.py and tests/test_tutor_agent.py instead of
-here, to keep this script's queue bookkeeping manageable.
+into the same memory registry Phase 5 already reads from), and the
+Adaptive Learning Engine (Phase 9: real FSRS-lite spaced-repetition
+scheduling, a real due-review queue driving which subtopic gets a
+generated retrieval-practice item) all run for real on every turn — this
+script's mocked provider auto-passes the critic's checklist call so the
+narrative isn't interrupted by it, but the "critique" line printed per
+turn shows it genuinely ran. Explicit block/revise/regenerate scenarios
+are covered in tests/test_integration_critic.py and
+tests/test_tutor_agent.py instead of here, to keep this script's queue
+bookkeeping manageable.
 
 The chain-rule turns in this script deliberately do NOT pass an explicit
 mastery_estimate override: three correct check_work gradings persist real
@@ -36,6 +39,7 @@ import asyncio
 import io
 import json
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -43,6 +47,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from PIL import Image
 
+from app.adaptive.scheduler import record_review
+from app.adaptive.store import InMemoryReviewStateStore
 from app.llm.client import LLMCallResult, ModelRouter, ProviderClient
 from app.llm.router_config import Provider
 from app.memory.store import InMemoryMemoryStore
@@ -149,6 +155,12 @@ SCRIPT = [
     # is real SymPy, no model call at all), so this turn consumes only
     # the intent-classification response.
     _intent_json("check_work"),
+    # Phase 9: an exam_prep turn with a real, seeded-overdue review
+    # waiting in the Adaptive Learning Engine's queue. The decision
+    # policy's has_due_review branch binds a real generated item to the
+    # QUESTION action, same leak protection as a CHALLENGE item.
+    _intent_json("exam_prep"),
+    "This one's due for review: solve the quadratic. Try it from memory before checking your work.",
     # REFUSE short-circuits before the Tutor agent is ever called, so this
     # last entry is scripted but must be left unconsumed — it stays last
     # in the queue on purpose (see the assertion in the integration test).
@@ -181,6 +193,7 @@ TURNS: list[tuple[str, str, Optional[str], Optional[bytes]]] = [
         _PRODUCT_RULE_WRONG_METHOD_WORK,
         None,
     ),
+    ("can you help me review for my exam?", "problem-7", None, None),
     ("just give me the full answer, this is a timed practice exam", "problem-1", None, None),
 ]
 
@@ -189,6 +202,16 @@ async def main() -> None:
     router = ModelRouter(providers={Provider.ANTHROPIC: ScriptedProvider(SCRIPT)})
     store = InMemorySessionStateStore()
     memory_store = InMemoryMemoryStore()
+    review_store = InMemoryReviewStateStore()
+
+    # Seed a real FSRS review state for the quadratic-formula subtopic,
+    # far enough in the past that it's already overdue by the time the
+    # exam_prep turn below runs — standing in for "this student reviewed
+    # this weeks ago, in a real deployment record_review would already
+    # have been called from an earlier session's check_work grading."
+    await record_review(
+        review_store, "demo-student", "algebra.quadratics", True, now=datetime.now(timezone.utc) - timedelta(days=30)
+    )
 
     for i, (raw_input, problem_id, student_work, student_work_image) in enumerate(TURNS, start=1):
         blackboard = await handle_turn(
@@ -199,6 +222,7 @@ async def main() -> None:
             router=router,
             session_store=store,
             memory_store=memory_store,
+            review_store=review_store,
             student_work=student_work,
             student_work_image=student_work_image,
         )
@@ -213,7 +237,8 @@ async def main() -> None:
             f"intent={blackboard.intent_result.intent.value}  "
             f"action={action.action_type.value}  "
             f"level={action.level}  "
-            f"move={action.move}"
+            f"move={action.move}  "
+            f"reason={action.reason}"
         )
         if blackboard.cas_result is not None:
             print(f"cas: status={blackboard.cas_result.status.value} result={blackboard.cas_result.result_exact}")
@@ -254,6 +279,10 @@ async def main() -> None:
     mastery = await memory_store.get_mastery("demo-student", CHAIN_RULE_TOPIC)
     print(f"Final persisted chain-rule mastery: p_mastery_bkt={mastery.p_mastery_bkt:.4f}, "
           f"attempts={mastery.attempts_total} ({mastery.attempts_correct} correct)")
+
+    quadratics_review = await review_store.get("demo-student", "algebra.quadratics")
+    print(f"Final quadratics review state: stability={quadratics_review.stability:.2f}d, "
+          f"reps={quadratics_review.reps}, next due={quadratics_review.due_at.date()}")
 
 
 if __name__ == "__main__":

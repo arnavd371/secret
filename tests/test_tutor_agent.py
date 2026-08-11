@@ -340,6 +340,67 @@ async def test_challenge_with_no_generated_item_uses_generic_fallback_on_leak():
 
 
 # ---------------------------------------------------------------------------
+# QUESTION/retrieval_practice + generated review items (spec §12, Phase 9's
+# Adaptive Learning Engine): a real spaced-repetition item bound to a
+# QUESTION action needs the exact same answer-leak protection a CHALLENGE
+# item gets, since the student is meant to attempt it, not be told the
+# answer.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_review_question_draft_that_only_poses_the_item_passes_through():
+    item = generate_item("AA.SL.CALC.DIFF.POWER.T001", seed=1)
+    router = _router_with_canned_response(f"This one's due for review: {item.rendered_stem} Try it from memory.")
+    action = Action(action_type=ActionType.QUESTION, move="retrieval_practice", reason="exam_prep_review_due")
+
+    response = await tutor_agent.generate(action, "help me review", router, challenge_item=item)
+
+    assert response.ui_metadata["templated"] is False
+    assert item.rendered_stem in response.text
+
+
+@pytest.mark.asyncio
+async def test_review_question_draft_leaking_the_items_answer_is_blocked():
+    item = generate_item("AA.SL.CALC.DIFF.POWER.T001", seed=1)
+    leaking_draft = f"This one's due: {item.rendered_stem} (the answer is {item.correct_answer.value}, by the way)"
+    router = _router_with_canned_response(leaking_draft)
+    action = Action(action_type=ActionType.QUESTION, move="retrieval_practice", reason="exam_prep_review_due")
+
+    response = await tutor_agent.generate(action, "help me review", router, challenge_item=item)
+
+    assert response.ui_metadata["templated"] is True
+    assert item.correct_answer.value not in response.text
+
+
+@pytest.mark.asyncio
+async def test_review_question_fallback_uses_the_generated_item_when_provider_fails():
+    item = generate_item("AA.SL.CALC.DIFF.CHAIN.T003", seed=2)
+    router = ModelRouter(providers={Provider.ANTHROPIC: _AlwaysFailsProvider()})
+    action = Action(action_type=ActionType.QUESTION, move="retrieval_practice", reason="exam_prep_review_due")
+
+    response = await tutor_agent.generate(action, "help me review", router, challenge_item=item)
+
+    assert response.ui_metadata["templated"] is True
+    assert item.rendered_stem in response.text
+    assert item.correct_answer.value not in response.text
+
+
+@pytest.mark.asyncio
+async def test_plain_retrieval_practice_question_without_an_item_is_unaffected():
+    """A QUESTION/retrieval_practice turn with no due review (no bound
+    item) must behave exactly as it always has — this change only adds
+    protection for the *new* bound-item case, it doesn't alter the old
+    unbound one."""
+    router = _router_with_canned_response("Can you recall the key rule this topic depends on?")
+    action = Action(action_type=ActionType.QUESTION, move="retrieval_practice", reason="test")
+
+    response = await tutor_agent.generate(action, "help me review", router, challenge_item=None)
+
+    assert response.ui_metadata["templated"] is False
+
+
+# ---------------------------------------------------------------------------
 # Verifier/Critic + escalation/regeneration (spec §13.5, §13.8)
 # ---------------------------------------------------------------------------
 
