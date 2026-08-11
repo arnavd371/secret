@@ -52,9 +52,13 @@ from typing import Optional
 
 from app.agents import router_agent, tutor_agent
 from app.agents.fallback import build_multimodal_confirmation_response, build_refusal_response
-from app.cas.extraction import extract_math_task
+from app.cas.extraction import MathTask, extract_math_task
 from app.cas.models import CASResult, CASStatus
 from app.cas.solver import run_cas_operation_async
+from app.diagnostician.catalog import describe
+from app.diagnostician.diagnose import diagnose_misconception
+from app.diagnostician.models import DiagnosisResult
+from app.diagnostician.write_policy import should_write_diagnosis
 from app.examiner.grader import grade_submission
 from app.examiner.models import MarkResult
 from app.knowledge.retriever import KnowledgeBase, get_default_knowledge_base
@@ -64,7 +68,7 @@ from app.memory.bkt import update_bkt
 from app.memory.context_assembly import assemble_memory_context
 from app.memory.decay import effective_mastery
 from app.memory.irt import update_irt
-from app.memory.models import MemoryReadContext, SubtopicMastery
+from app.memory.models import MemoryReadContext, MisconceptionRegistryEntry, SubtopicMastery
 from app.memory.store import MemoryStore, get_default_memory_store
 from app.memory.write_policy import should_write_mastery_update
 from app.models.contracts import ActionType, Blackboard, DecisionSignals, IntentType, RawInput, TutorResponse
@@ -112,10 +116,16 @@ async def _generate_challenge_item(topic_hint: Optional[str]) -> Optional[Genera
         return None
 
 
-async def _grade_check_work_turn(turn_id: str, raw_input: str, student_work: str) -> Optional[MarkResult]:
-    """Returns a MarkResult if the problem in `raw_input` was extractable
-    and CAS-verifiable, else None — meaning the caller should fall back to
-    the normal Tutor-generated EXPLAIN path instead of grading blind."""
+async def _grade_check_work_turn(
+    turn_id: str, raw_input: str, student_work: str
+) -> Optional[tuple[MarkResult, MathTask, CASResult]]:
+    """Returns (MarkResult, MathTask, CASResult) if the problem in
+    `raw_input` was extractable and CAS-verifiable, else None — meaning
+    the caller should fall back to the normal Tutor-generated EXPLAIN
+    path instead of grading blind. The MathTask/CASResult are returned
+    alongside the grade (not just used internally) because the
+    Misconception Diagnostician (Phase 8) needs the same CAS ground
+    truth to generate its wrong-answer hypotheses against."""
     math_task = extract_math_task(raw_input)
     if math_task is None:
         return None
@@ -127,7 +137,39 @@ async def _grade_check_work_turn(turn_id: str, raw_input: str, student_work: str
         return None
 
     mark_scheme = build_mark_scheme(f"check-{turn_id}", cas_result)
-    return grade_submission(f"check-{turn_id}", mark_scheme, student_work, given_expression=math_task.expression)
+    mark_result = grade_submission(f"check-{turn_id}", mark_scheme, student_work, given_expression=math_task.expression)
+    return mark_result, math_task, cas_result
+
+
+async def _diagnose_and_write_misconception(
+    router: ModelRouter, student_id: str, math_task: MathTask, cas_result: CASResult, student_work: str, memory_store: MemoryStore
+) -> DiagnosisResult:
+    diagnosis = await diagnose_misconception(router, math_task, cas_result, student_work)
+    if not should_write_diagnosis(diagnosis):
+        return diagnosis
+
+    now = datetime.now(timezone.utc)
+    existing_entries = await memory_store.get_misconceptions(student_id)
+    existing = next((e for e in existing_entries if e.misconception_id == diagnosis.misconception_id), None)
+    if existing is not None:
+        existing.occurrences += 1
+        existing.last_observed_at = now
+        # A repeat diagnosis reinforces rather than overwrites: never
+        # let a fresh observation's strength read as weaker than what
+        # was already on record.
+        existing.decayed_strength = max(existing.decayed_strength, diagnosis.confidence)
+        entry = existing
+    else:
+        entry = MisconceptionRegistryEntry(
+            student_id=student_id,
+            misconception_id=diagnosis.misconception_id,
+            occurrences=1,
+            first_observed_at=now,
+            last_observed_at=now,
+            decayed_strength=diagnosis.confidence,
+        )
+    await memory_store.save_misconception(entry)
+    return diagnosis
 
 
 async def _load_memory(
@@ -280,12 +322,26 @@ async def handle_turn(
     # through to the normal Tutor-generated path if the problem wasn't
     # extractable/verifiable — grading blind isn't an option.
     if intent_result.intent == IntentType.CHECK_WORK and student_work:
-        mark_result = await _grade_check_work_turn(blackboard.turn_id, raw_input, student_work)
-        if mark_result is not None:
+        grading = await _grade_check_work_turn(blackboard.turn_id, raw_input, student_work)
+        if grading is not None:
+            mark_result, math_task, cas_result = grading
             blackboard.mark_result = mark_result
             await _write_mastery_from_grading(student_id, intent_result.topic_hint, mark_result, memory_store)
+
+            response_text = mark_result.comment
+            # Misconception Diagnostician (Phase 8, spec §8): only worth
+            # running when marks were actually missed — a fully correct
+            # submission has nothing to diagnose.
+            if mark_result.total_available > 0 and mark_result.total_awarded < mark_result.total_available:
+                diagnosis = await _diagnose_and_write_misconception(
+                    router, student_id, math_task, cas_result, student_work, memory_store
+                )
+                blackboard.diagnosis_result = diagnosis
+                if should_write_diagnosis(diagnosis):
+                    response_text += f" This looks like a specific, recognizable error: {describe(diagnosis.misconception_id)}"
+
             response = TutorResponse(
-                text=mark_result.comment,
+                text=response_text,
                 citations=[],
                 ui_metadata={
                     "action_type": action.action_type.value,

@@ -1,5 +1,5 @@
 """
-Runnable demo of the reasoning core through Phase 7: a scripted, multi-turn
+Runnable demo of the reasoning core through Phase 8: a scripted, multi-turn
 conversation through `handle_turn`, with a mocked model provider so it runs
 with no API key and no network access. The Router/Intent classification,
 Tutor generation, and math_ocr transcription calls are mocked; the decision
@@ -8,12 +8,15 @@ search over the seed knowledge base), question generation (real,
 quality-gated, CAS-verified items), grading (real step segmentation +
 alignment + mark awarding), memory (real BKT/IRT mastery updates, decay,
 and budgeted context assembly), the Verifier/Critic + grounding check
-(Phase 6), and the multimodal ingestion pipeline (Phase 7: real intake
+(Phase 6), the multimodal ingestion pipeline (Phase 7: real intake
 validation, real PIL preprocessing, real LaTeX normalization/expression-
-parsing/confidence scoring) all run for real on every turn — this script's
-mocked provider auto-passes the critic's checklist call so the narrative
-isn't interrupted by it, but the "critique" line printed per turn shows it
-genuinely ran. Explicit block/revise/regenerate scenarios are covered in
+parsing/confidence scoring), and the Misconception Diagnostician (Phase 8:
+real SymPy pattern detection against the actual problem, written straight
+into the same memory registry Phase 5 already reads from) all run for real
+on every turn — this script's mocked provider auto-passes the critic's
+checklist call so the narrative isn't interrupted by it, but the
+"critique" line printed per turn shows it genuinely ran. Explicit
+block/revise/regenerate scenarios are covered in
 tests/test_integration_critic.py and tests/test_tutor_agent.py instead of
 here, to keep this script's queue bookkeeping manageable.
 
@@ -90,6 +93,13 @@ _CORRECT_CHAIN_RULE_WORK = "u = 2*x + 1\ntherefore dy/dx = 5*(2*x + 1)**4 * 2"
 # expression-parseability, composite confidence scoring).
 _PHOTOGRAPHED_WORK_TRANSCRIPTION = "u = 3*x + 2\ntherefore dy/dx = 2*(3*x + 2)*3"
 
+# Phase 8: a wrong submission that exactly matches a catalogued
+# misconception (MISC-CALC-010: differentiating a product as f'(x)g'(x)
+# instead of applying the product rule) for this specific problem's real
+# CAS-verified derivative — not a template-time distractor, a real
+# pattern match computed backwards from the actual problem.
+_PRODUCT_RULE_WRONG_METHOD_WORK = "u = x**2, v = sin(x)\ntherefore dy/dx = 2*x*cos(x)"
+
 
 def _fake_photo_bytes() -> bytes:
     """A synthetic PNG standing in for a real phone photo of handwritten
@@ -134,6 +144,11 @@ SCRIPT = [
     # math_ocr transcription response — no paired "tutor draft".
     _intent_json("check_work"),
     _PHOTOGRAPHED_WORK_TRANSCRIPTION,
+    # Phase 8: another check_work turn, this one wrong. Grading and
+    # diagnosis both bypass the Tutor LLM entirely (the pattern detector
+    # is real SymPy, no model call at all), so this turn consumes only
+    # the intent-classification response.
+    _intent_json("check_work"),
     # REFUSE short-circuits before the Tutor agent is ever called, so this
     # last entry is scripted but must be left unconsumed — it stays last
     # in the queue on purpose (see the assertion in the integration test).
@@ -159,6 +174,12 @@ TURNS: list[tuple[str, str, Optional[str], Optional[bytes]]] = [
         "problem-5",
         None,
         _fake_photo_bytes(),
+    ),
+    (
+        "can you check my work? differentiate x**2 * sin(x)",
+        "problem-6",
+        _PRODUCT_RULE_WRONG_METHOD_WORK,
+        None,
     ),
     ("just give me the full answer, this is a timed practice exam", "problem-1", None, None),
 ]
@@ -213,6 +234,10 @@ async def main() -> None:
         if blackboard.mark_result is not None:
             mr = blackboard.mark_result
             print(f"grading: {mr.total_awarded}/{mr.total_available} marks, confidence={mr.confidence.value}, flags={mr.flags}")
+        if blackboard.diagnosis_result is not None:
+            diag = blackboard.diagnosis_result
+            method = diag.method.value if diag.method else "none"
+            print(f"diagnosis: misconception={diag.misconception_id} method={method} confidence={diag.confidence}")
         if blackboard.student_state_snapshot is not None and blackboard.student_state_snapshot.subtopic_id:
             print(f"memory: {blackboard.student_state_snapshot.rendered_text}")
         print(f"tutor: {blackboard.final_response.text}")

@@ -25,6 +25,7 @@ from typing import Any, Optional, Union
 from pydantic import BaseModel, Field
 
 from app.cas.models import CASResult
+from app.diagnostician.models import DiagnosisResult
 from app.examiner.models import MarkResult
 from app.knowledge.schemas import RetrievedChunk
 from app.memory.models import MemoryReadContext
@@ -233,8 +234,12 @@ class Blackboard(BaseModel):
     # math task is extractable from the turn and the decision_action is
     # EXPLAIN. None when no task was extracted this turn.
     cas_result: Optional[CASResult] = None
-    # TODO(later phase): populated by the Misconception Diagnostician agent.
-    diagnosis_result: Optional[dict[str, Any]] = None
+    # Populated by the Misconception Diagnostician (app/diagnostician/diagnose.py,
+    # spec §8) after a check_work submission grades as incorrect: a real
+    # pattern-matched or model-inferred diagnosis, or a "no diagnosis"
+    # result when nothing was confidently identifiable. None when the
+    # turn wasn't a graded-incorrect check_work submission at all.
+    diagnosis_result: Optional[DiagnosisResult] = None
     # Populated by the Question Generation Engine (app/questions/generator.py)
     # when the decision_action is CHALLENGE — a real, CAS-verified,
     # quality-gated extension item, not something the Tutor agent invents.

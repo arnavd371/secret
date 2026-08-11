@@ -14,6 +14,10 @@ it's a checklist-style pass, not full generation). Phase 7 adds a fourth,
 "math_ocr", for the multimodal ingestion pipeline's vision call (spec
 §3.2 and §14.2: no specialized math-OCR service like Mathpix is wired up,
 so a general vision-capable model is the documented, acceptable fallback).
+Phase 8 adds a fifth, "misconception_diagnose", for the Misconception
+Diagnostician's model-inference fallback (spec §8) — same fast/cheap
+tier as critic_check, since it's a classify-against-a-fixed-catalog call,
+not open-ended generation.
 """
 
 from __future__ import annotations
@@ -65,6 +69,13 @@ CAPABILITY_MODEL_MAP: dict[str, ModelSpec] = {
         max_tokens=1024,
         temperature=0.0,
         timeout_seconds=12.0,
+    ),
+    "misconception_diagnose": ModelSpec(
+        provider=Provider.ANTHROPIC,
+        model="claude-haiku-4-5-20251001",
+        max_tokens=256,
+        temperature=0.0,
+        timeout_seconds=4.0,
     ),
 }
 

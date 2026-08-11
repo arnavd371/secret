@@ -1,6 +1,6 @@
-# AI Tutor - Phases 1-7: Reasoning Core, Verification/Retrieval, Question Generation, Grading, Memory, Quality Control, Multimodal Ingestion
+# AI Tutor - Phases 1-8: Reasoning Core, Verification/Retrieval, Question Generation, Grading, Memory, Quality Control, Multimodal Ingestion, Misconception Diagnosis
 
-The intelligence layer for an AI-native IB DP Math AA tutoring assistant, built to the Engineering Blueprint v1.0 spec. Covers Phase 1 (reasoning core), Phase 2 (CAS verification + retrieval), Phase 3 (question generation), Phase 4 (grading / AI examiner), Phase 5 (student memory system), Phase 6 (AI quality control), and Phase 7 (multimodal ingestion).
+The intelligence layer for an AI-native IB DP Math AA tutoring assistant, built to the Engineering Blueprint v1.0 spec. Covers Phase 1 (reasoning core), Phase 2 (CAS verification + retrieval), Phase 3 (question generation), Phase 4 (grading / AI examiner), Phase 5 (student memory system), Phase 6 (AI quality control), Phase 7 (multimodal ingestion), and Phase 8 (misconception diagnosis).
 
 ## What this does
 
@@ -57,7 +57,14 @@ Phase 7, multimodal ingestion, runs for check_work when the student attaches a p
 - Scores a composite confidence (transcription length, expression parseability, LaTeX well-formedness) and gates on it: a high-confidence transcription is graded immediately through Phase 4's real grader, exactly as if the student had typed it. Anything less (a rejected image, a failed vision call, or a medium/low-confidence transcription) gets a templated response asking the student to confirm what was read, retype, or retake the photo. The Tutor LLM is never asked to grade an unconfirmed transcription.
 - If the caller already has typed student work for the turn, the image is ignored entirely rather than re-transcribing over good text.
 
-Not built yet: real curriculum/template content beyond the seed set, automatic misconception detection (the registry is real, but nothing populates it yet), IA supervisor, adaptive learning engine, multi-page PDF or HEIC image intake (PNG/JPEG only), a specialized math-OCR service (a general vision-capable model is used instead, the documented fallback per spec), expression parsing for matrices/integrals-with-limits/piecewise notation, dense/vector retrieval, a reranker, LLM-authored item variants, IRT recalibration from response history, grade-boundary calibration from historical exam data, human-in-the-loop review/appeals, memory consolidation batch jobs, GDPR export/erasure workflows, self-consistency multi-sampling (the CAS/mark-scheme verification this system already has is a stronger deterministic guarantee for the claims that matter, so this was a considered tradeoff, not an oversight), offline eval harness, online guardrail metrics, regression gating, shadow evaluation. These are stubbed with TODOs pointing at the relevant spec section.
+Phase 8, misconception diagnosis, runs whenever a check_work submission (typed or photographed) grades as incorrect:
+
+- Tries a real, deterministic pattern match first: for the actual problem the student is working (not a fixed template), computes what a specific named error would produce with SymPy, and checks whether the student's stated answer matches that exactly. A match is high-trust by construction, confidence fixed at 1.0.
+- Falls back to a model call (the `misconception_diagnose` capability) only when no pattern matches, constrained to choosing from the same fixed misconception catalog or reporting none rather than free-form diagnosis. Its own reported confidence is gated before anything gets persisted.
+- Writes a confirmed diagnosis into the same per-student misconception registry Phase 5 already built and decays over time; a repeat diagnosis increments the existing entry instead of duplicating it.
+- Closes the loop Phase 5 left open: the very next turn's memory context assembly (already real since Phase 5) automatically surfaces the misconception in the Tutor prompt's ACTIVE MISCONCEPTIONS slot, with no additional wiring needed.
+
+Not built yet: real curriculum/template content beyond the seed set, the full spec §8.2 misconception catalog (this build covers four named errors with real detection behind them, not the whole syllabus), per-node solution-graph diagnosis for errors that aren't a clean pattern match, IA supervisor, adaptive learning engine, multi-page PDF or HEIC image intake (PNG/JPEG only), a specialized math-OCR service (a general vision-capable model is used instead, the documented fallback per spec), expression parsing for matrices/integrals-with-limits/piecewise notation, dense/vector retrieval, a reranker, LLM-authored item variants, IRT recalibration from response history, grade-boundary calibration from historical exam data, human-in-the-loop review/appeals, memory consolidation batch jobs, GDPR export/erasure workflows, self-consistency multi-sampling (the CAS/mark-scheme verification this system already has is a stronger deterministic guarantee for the claims that matter, so this was a considered tradeoff, not an oversight), offline eval harness, online guardrail metrics, regression gating, shadow evaluation. These are stubbed with TODOs pointing at the relevant spec section.
 
 ## Structure
 
@@ -73,6 +80,7 @@ app/
   memory/                   BKT/IRT mastery, decay, node states, misconception registry, context assembly
   verifier/                 Verifier/Critic checklist agent, grounding entailment check
   multimodal/               image intake validation, PIL preprocessing, math_ocr call, LaTeX normalization, confidence gating
+  diagnostician/            misconception catalog, SymPy pattern detectors, model-inference fallback, write policy
   llm/                      model router: one config file for all model names, one call() entrypoint
   session/state.py          hint ladder session state
   orchestrator/             wires everything together into handle_turn()
@@ -89,13 +97,13 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Run the tests (269 tests, all mocked at the model boundary, no API key or network needed; SymPy, retrieval, item generation, grading, memory math, the grounding check, and the multimodal preprocessing/normalization/confidence math all run for real):
+Run the tests (299 tests, all mocked at the model boundary, no API key or network needed; SymPy, retrieval, item generation, grading, memory math, the grounding check, the multimodal preprocessing/normalization/confidence math, and the misconception pattern detectors all run for real):
 
 ```bash
 pytest -q
 ```
 
-Run the scripted demo conversation (shows real mastery climb from three gradings driving a later CHALLENGE decision with no override, a `critique:` line per turn confirming the Verifier/Critic and grounding check ran, and an `ingestion:` line for a photographed submission showing the real intake/preprocessing/confidence pipeline running before grading):
+Run the scripted demo conversation (shows real mastery climb from three gradings driving a later CHALLENGE decision with no override, a `critique:` line per turn confirming the Verifier/Critic and grounding check ran, an `ingestion:` line for a photographed submission showing the real intake/preprocessing/confidence pipeline running before grading, and a `diagnosis:` line for a wrong submission showing the misconception it was pattern-matched to, which then appears in the very next turn's `memory:` line):
 
 ```bash
 python scripts/run_scripted_conversation.py
