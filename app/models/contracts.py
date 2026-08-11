@@ -24,6 +24,9 @@ from typing import Any, Optional, Union
 
 from pydantic import BaseModel, Field
 
+from app.cas.models import CASResult
+from app.knowledge.schemas import RetrievedChunk
+
 
 # ---------------------------------------------------------------------------
 # Shared enums (values pinned to spec §1.5 / §2.2 signal & schema tables)
@@ -211,11 +214,16 @@ class Blackboard(BaseModel):
     # TODO: Planner agent isn't built in Phase 1 — the orchestrator runs a
     # fixed linear sequence instead of a Planner-produced stage graph.
     execution_plan: Optional[dict[str, Any]] = None
-    # TODO(Phase 2): populated by the Retriever agent against the curriculum
-    # knowledge base. Left as None in Phase 1 — no retrieval exists yet.
-    retrieved_chunks: Optional[list[Any]] = None
-    # TODO(Phase 2): populated by the Math Solver + CAS agent.
-    cas_result: Optional[dict[str, Any]] = None
+    # Populated by the Retriever agent (app/knowledge/retriever.py) when the
+    # decision_action is EXPLAIN/CHALLENGE. TODO(later phase): the real
+    # hybrid BM25+dense+graph+rerank pipeline of §5.6 — this is a lexical
+    # TF/cosine retriever over a small hand-authored seed corpus, not the
+    # full knowledge base.
+    retrieved_chunks: Optional[list[RetrievedChunk]] = None
+    # Populated by the Math Solver + CAS agent (app/cas/solver.py) when a
+    # math task is extractable from the turn and the decision_action is
+    # EXPLAIN/CHALLENGE. None when no task was extracted this turn.
+    cas_result: Optional[CASResult] = None
     # TODO(later phase): populated by the Misconception Diagnostician agent.
     diagnosis_result: Optional[dict[str, Any]] = None
 

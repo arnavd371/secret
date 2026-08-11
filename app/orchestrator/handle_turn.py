@@ -1,18 +1,26 @@
 """
 The orchestrator: wires Router/Intent -> session state -> decision policy
--> Tutor agent (or hard-gated refusal) -> session state update.
+-> CAS verification + retrieval (when the action can state an answer) ->
+Tutor agent (or hard-gated refusal) -> session state update.
 
 `handle_turn` is the only place these components are composed together.
 Every component it calls already owns its own fallback behavior (see
-router_agent.py and tutor_agent.py) — the orchestrator's job is sequencing
-and state, not catching stray exceptions from components that should have
-handled their own failure modes already. The one thing it enforces itself
-is the REFUSE hard-gate: that path returns immediately and never touches
-the Tutor agent at all.
+router_agent.py, tutor_agent.py, cas/solver.py) — the orchestrator's job
+is sequencing and state, not catching stray exceptions from components
+that should have handled their own failure modes already. The one thing
+it enforces itself is the REFUSE hard-gate: that path returns immediately
+and never touches the Tutor agent (or CAS/retrieval) at all.
 
-Phase 1 runs a fixed linear sequence rather than the Planner-produced
-parallel stage graph of spec §6 (Retriever/CAS/Diagnostician stages don't
-exist yet — see the TODOs on Blackboard fields in app/models/contracts.py).
+Phase 2 runs CAS verification and retrieval only for EXPLAIN/CHALLENGE —
+the action types spec §1.4/§7.7 permit to state a final answer or a
+syllabus-specific claim at all. QUESTION/HINT/SUPPORTIVE_SCAFFOLD never
+state either, so grounding them would be wasted work; that's a Phase 2
+scoping decision, not a spec requirement to skip it.
+
+Phase 2 still runs a fixed linear sequence rather than the Planner's
+parallel stage graph (spec §6) — Planner, Memory, and Diagnosis agents
+remain later-phase non-goals (see the TODOs on Blackboard's stubbed
+fields in app/models/contracts.py).
 """
 
 from __future__ import annotations
@@ -23,6 +31,11 @@ from typing import Optional
 
 from app.agents import router_agent, tutor_agent
 from app.agents.fallback import build_refusal_response
+from app.cas.extraction import extract_math_task
+from app.cas.models import CASResult
+from app.cas.solver import run_cas_operation_async
+from app.knowledge.retriever import KnowledgeBase, get_default_knowledge_base
+from app.knowledge.schemas import RetrievedChunk
 from app.llm.client import ModelRouter
 from app.models.contracts import ActionType, Blackboard, DecisionSignals, RawInput
 from app.orchestrator.signals import DEFAULT_MASTERY_ESTIMATE, estimate_frustration, estimate_safety_result
@@ -30,6 +43,25 @@ from app.policy.decision import decide_pedagogical_action
 from app.session.state import InMemorySessionStateStore, ProblemSessionState, SessionStateStore, advance_session_state
 
 logger = logging.getLogger(__name__)
+
+# Only these action types are permitted to state a final answer or a
+# syllabus-specific claim (spec §1.4, §7.7's HARD CONSTRAINTS), so only
+# these are worth grounding against CAS/retrieval.
+_GROUNDING_ELIGIBLE_ACTIONS = (ActionType.EXPLAIN, ActionType.CHALLENGE)
+
+
+async def _ground_turn(
+    raw_input: str, topic_hint: Optional[str], knowledge_base: KnowledgeBase
+) -> tuple[Optional[CASResult], list[RetrievedChunk]]:
+    cas_result: Optional[CASResult] = None
+    math_task = extract_math_task(raw_input)
+    if math_task is not None:
+        cas_result = await run_cas_operation_async(
+            math_task.operation, math_task.expression, math_task.variable, math_task.at
+        )
+
+    retrieved_chunks = knowledge_base.retrieve(raw_input, topic_hint=topic_hint)
+    return cas_result, retrieved_chunks
 
 
 async def handle_turn(
@@ -40,6 +72,7 @@ async def handle_turn(
     *,
     router: Optional[ModelRouter] = None,
     session_store: Optional[SessionStateStore] = None,
+    knowledge_base: Optional[KnowledgeBase] = None,
     mastery_estimate: float = DEFAULT_MASTERY_ESTIMATE,
 ) -> Blackboard:
     """
@@ -50,6 +83,7 @@ async def handle_turn(
     """
     router = router or ModelRouter()
     session_store = session_store or InMemorySessionStateStore()
+    knowledge_base = knowledge_base or get_default_knowledge_base()
 
     blackboard = Blackboard(
         turn_id=str(uuid.uuid4()),
@@ -83,14 +117,23 @@ async def handle_turn(
     action = decide_pedagogical_action(signals)
     blackboard.decision_action = action
 
-    # Hard gate: REFUSE short-circuits here. The Tutor agent is never
-    # invoked for a REFUSE action, by construction.
+    # Hard gate: REFUSE short-circuits here. The Tutor agent (and
+    # CAS/retrieval) is never invoked for a REFUSE action, by construction.
     if action.action_type == ActionType.REFUSE:
         response = build_refusal_response(action)
         blackboard.final_response = response
         return blackboard
 
-    response = await tutor_agent.generate(action, raw_input, router)
+    cas_result: Optional[CASResult] = None
+    retrieved_chunks: list[RetrievedChunk] = []
+    if action.action_type in _GROUNDING_ELIGIBLE_ACTIONS:
+        cas_result, retrieved_chunks = await _ground_turn(raw_input, intent_result.topic_hint, knowledge_base)
+        blackboard.cas_result = cas_result
+        blackboard.retrieved_chunks = retrieved_chunks
+
+    response = await tutor_agent.generate(
+        action, raw_input, router, cas_result=cas_result, retrieved_chunks=retrieved_chunks
+    )
     blackboard.draft_response = response
     blackboard.final_response = response
 

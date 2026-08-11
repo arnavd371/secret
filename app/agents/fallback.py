@@ -9,6 +9,7 @@ contract by construction.
 
 from __future__ import annotations
 
+from app.cas.models import CASResult
 from app.models.contracts import Action, ActionType, TutorResponse
 
 _OFFER_TEXT = {
@@ -103,4 +104,48 @@ def get_fallback_response(action: Action) -> TutorResponse:
         text=text,
         citations=[],
         ui_metadata={"action_type": action.action_type.value, "level": action.level, "templated": True},
+    )
+
+
+def build_cas_unverifiable_response(action: Action) -> TutorResponse:
+    """
+    Spec §1.4: "if CAS verification fails or times out, the response
+    degrades to a hint-only reply and the failure is logged." Used when a
+    math task was extracted for this turn but the CAS agent could not
+    compute/verify a result for it (status=unverifiable).
+    """
+    text = (
+        "I wasn't able to confidently verify this computation, so I don't want to state a specific result "
+        "that might be wrong. Let's work through it together instead. What's the first step you'd try?"
+    )
+    return TutorResponse(
+        text=text,
+        citations=[],
+        ui_metadata={"action_type": action.action_type.value, "cas_status": "unverifiable", "templated": True},
+    )
+
+
+def build_cas_grounded_response(action: Action, cas_result: CASResult) -> TutorResponse:
+    """
+    Spec §1.4: "The LLM-authored narrative is discarded/regenerated if it
+    disagrees with the CAS result." Rather than discard-and-retry (an
+    extra model call), Phase 2 substitutes a minimal response built
+    directly from the CAS ground truth — safe because EXPLAIN/CHALLENGE
+    are the only action types permitted to state a final answer at all,
+    and this text states nothing the CAS agent didn't itself compute.
+    """
+    text = (
+        f"Let me verify that computation directly: for {action.move or 'this step'}, the CAS-checked result "
+        f"is `{cas_result.result_exact}`. The draft explanation didn't match this, so here's the confirmed "
+        "result instead of an unverified one."
+    )
+    return TutorResponse(
+        text=text,
+        citations=[],
+        ui_metadata={
+            "action_type": action.action_type.value,
+            "cas_status": cas_result.status.value,
+            "cas_grounded": True,
+            "templated": True,
+        },
     )

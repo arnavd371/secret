@@ -1,8 +1,10 @@
 """
-Runnable demo of the Phase 1 reasoning core: a scripted, multi-turn
+Runnable demo of the reasoning core through Phase 2: a scripted, multi-turn
 conversation through `handle_turn`, with a mocked model provider so it runs
-with no API key and no network access. No real curriculum content and no
-CAS verification are involved — those are Phase 2.
+with no API key and no network access. The Router/Intent classification and
+Tutor generation are mocked; the decision policy, hint ladder, CAS
+verification (real SymPy), and retrieval (real lexical search over the
+seed knowledge base) all run for real.
 
 Run with:
     python scripts/run_scripted_conversation.py
@@ -55,6 +57,11 @@ SCRIPT = [
     "Try labeling one factor u and the other v, then recall the product rule formula.",
     _intent_json("solve_request"),
     "Write out u' and v' separately, then combine them with the product rule.",
+    _intent_json("concept_explain"),
+    "Using the product rule, the derivative is 2*x*cos(x) - x**2*sin(x).",
+    # REFUSE short-circuits before the Tutor agent is ever called, so this
+    # last entry is scripted but must be left unconsumed — it stays last
+    # in the queue on purpose (see the assertion in the integration test).
     _intent_json("solve_request", assessment_mode_guess="live_exam_simulation"),
     "THIS SHOULD NEVER BE SHOWN — the exam-mode hard gate must refuse before this is reached.",
 ]
@@ -64,6 +71,7 @@ TURNS = [
     ("still not sure what to do", "problem-1"),
     ("I tried but I'm still lost", "problem-1"),
     ("that hint didn't help either", "problem-1"),
+    ("differentiate x**2 * cos(x)", "problem-2"),
     ("just give me the full answer, this is a timed practice exam", "problem-1"),
 ]
 
@@ -90,7 +98,11 @@ async def main() -> None:
             f"level={action.level}  "
             f"move={action.move}"
         )
+        if blackboard.cas_result is not None:
+            print(f"cas: status={blackboard.cas_result.status.value} result={blackboard.cas_result.result_exact}")
         print(f"tutor: {blackboard.final_response.text}")
+        if blackboard.final_response.citations:
+            print(f"citations: {blackboard.final_response.citations}")
         print()
 
 
