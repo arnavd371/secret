@@ -30,13 +30,21 @@ from app.session.state import InMemorySessionStateStore
 class ScriptedProvider(ProviderClient):
     """Pops one canned response per call, in the exact order the
     orchestrator is expected to make them (intent classify, then tutor
-    generate, per turn — skipping tutor generate on a REFUSE turn)."""
+    generate, per turn — skipping tutor generate on a REFUSE turn).
+
+    Phase 6's Verifier/Critic makes an additional, independent model call
+    per turn (same shared Provider.ANTHROPIC queue). These tests aren't
+    exercising critic behavior, so a critic-shaped system prompt is
+    auto-passed here without consuming a slot in the scripted queue,
+    keeping every existing test's intent/tutor script untouched."""
 
     def __init__(self, responses: list[str]) -> None:
         self._responses = list(responses)
         self.calls: list[dict] = []
 
     async def generate(self, *, spec, system, user) -> LLMCallResult:
+        if system.startswith("You are a strict, checklist-driven critic"):
+            return LLMCallResult(text='{"verdict": "pass", "violations": []}', model=spec.model, provider=Provider.ANTHROPIC)
         self.calls.append({"model": spec.model, "system": system, "user": user})
         if not self._responses:
             raise ModelUnavailableError("scripted responses exhausted")

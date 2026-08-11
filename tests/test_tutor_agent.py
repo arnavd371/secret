@@ -3,13 +3,15 @@ Tests for the Tutor agent's structural enforcement: the action contract
 must be respected even when the underlying model draft doesn't respect it.
 """
 
+import json
+
 import pytest
 
 from app.agents import tutor_agent
 from app.agents.fallback import get_fallback_response
 from app.cas.solver import differentiate, solve_equation
 from app.knowledge.schemas import DocType, RetrievedChunk
-from app.llm.client import ModelRouter, ModelUnavailableError, MockProvider
+from app.llm.client import LLMCallResult, ModelRouter, ModelUnavailableError, MockProvider, ProviderClient
 from app.llm.router_config import Provider
 from app.models.contracts import Action, ActionType
 from app.questions.generator import generate_item
@@ -17,6 +19,24 @@ from app.questions.generator import generate_item
 
 def _router_with_canned_response(text: str) -> ModelRouter:
     return ModelRouter(providers={Provider.ANTHROPIC: MockProvider(canned_response=text)})
+
+
+class _QueuedProvider(ProviderClient):
+    """Returns a different scripted response on each successive call, in
+    order — used where a single test needs to script the Tutor draft and
+    the independent Critic response separately (MockProvider only ever
+    returns one fixed canned response, insufficient here)."""
+
+    def __init__(self, responses: list[str]) -> None:
+        self._responses = list(responses)
+
+    async def generate(self, *, spec, system, user) -> LLMCallResult:
+        text = self._responses.pop(0)
+        return LLMCallResult(text=text, model=spec.model, provider=Provider.ANTHROPIC)
+
+
+def _router_with_queued_responses(responses: list[str]) -> ModelRouter:
+    return ModelRouter(providers={Provider.ANTHROPIC: _QueuedProvider(responses)})
 
 
 class _AlwaysFailsProvider:
@@ -317,3 +337,158 @@ async def test_challenge_with_no_generated_item_uses_generic_fallback_on_leak():
 
     assert response.ui_metadata["templated"] is True
     assert "42" not in response.text
+
+
+# ---------------------------------------------------------------------------
+# Verifier/Critic + escalation/regeneration (spec §13.5, §13.8)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_critic_block_verdict_discards_an_otherwise_clean_draft():
+    router = _router_with_queued_responses(
+        [
+            "A perfectly clean-looking draft explanation.",
+            json.dumps({"verdict": "block", "violations": ["off-topic content"]}),
+        ]
+    )
+    action = Action(action_type=ActionType.EXPLAIN, move="direct_explanation", reason="test")
+
+    response = await tutor_agent.generate(action, "explain something", router)
+
+    assert response.ui_metadata["templated"] is True
+    assert response.text != "A perfectly clean-looking draft explanation."
+
+
+@pytest.mark.asyncio
+async def test_critic_pass_verdict_lets_a_clean_draft_through_with_metadata():
+    router = _router_with_queued_responses(
+        [
+            "A clean draft explanation.",
+            json.dumps({"verdict": "pass", "violations": []}),
+        ]
+    )
+    action = Action(action_type=ActionType.EXPLAIN, move="direct_explanation", reason="test")
+
+    response = await tutor_agent.generate(action, "explain something", router)
+
+    assert response.ui_metadata["templated"] is False
+    assert response.ui_metadata["critique_verdict"] == "pass"
+    assert response.ui_metadata["critic_degraded"] is False
+    assert response.text == "A clean draft explanation."
+
+
+@pytest.mark.asyncio
+async def test_critic_revise_verdict_triggers_one_regeneration_that_succeeds():
+    router = _router_with_queued_responses(
+        [
+            "A slightly blunt draft.",
+            json.dumps({"verdict": "revise", "violations": ["tone too blunt"]}),
+            "A warmer, regenerated draft.",
+        ]
+    )
+    action = Action(action_type=ActionType.EXPLAIN, move="direct_explanation", reason="test")
+
+    response = await tutor_agent.generate(action, "explain something", router)
+
+    assert response.ui_metadata["templated"] is False
+    assert response.ui_metadata["critique_verdict"] == "revise"
+    assert response.text == "A warmer, regenerated draft."
+
+
+@pytest.mark.asyncio
+async def test_critic_revise_verdict_falls_back_when_regeneration_also_leaks():
+    action = Action(action_type=ActionType.HINT, level=1, reason="test")
+    router = _router_with_queued_responses(
+        [
+            "A decent hint without leaking.",
+            json.dumps({"verdict": "revise", "violations": ["could be clearer"]}),
+            "Oops, the answer is 42 now.",  # regeneration itself leaks
+        ]
+    )
+
+    response = await tutor_agent.generate(action, "give me a hint", router)
+
+    assert response.ui_metadata["templated"] is True
+    assert "42" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_critic_revise_verdict_falls_back_when_regeneration_provider_fails():
+    class _FailsOnThirdCallProvider(ProviderClient):
+        def __init__(self) -> None:
+            self._responses = ["An okay draft.", json.dumps({"verdict": "revise", "violations": ["needs more detail"]})]
+
+        async def generate(self, *, spec, system, user) -> LLMCallResult:
+            if not self._responses:
+                raise ModelUnavailableError("simulated outage on regeneration attempt")
+            text = self._responses.pop(0)
+            return LLMCallResult(text=text, model=spec.model, provider=Provider.ANTHROPIC)
+
+    action = Action(action_type=ActionType.EXPLAIN, move="direct_explanation", reason="test")
+    router = ModelRouter(providers={Provider.ANTHROPIC: _FailsOnThirdCallProvider()})
+
+    response = await tutor_agent.generate(action, "explain something", router)
+
+    assert response.ui_metadata["templated"] is True
+    assert response.text != "An okay draft."
+
+
+@pytest.mark.asyncio
+async def test_ungrounded_explain_draft_is_blocked_even_with_critic_pass():
+    """The grounding check (spec §13.6) is an independent gate — a critic
+    that says "pass" doesn't override a draft that clearly doesn't reflect
+    its cited context."""
+    chunks = [
+        RetrievedChunk(
+            chunk_id="FB-AA-5.8",
+            doc_type=DocType.FORMULA_BOOKLET_ENTRY,
+            subtopic_id="calculus.differentiation.chain_rule",
+            citation="Formula booklet, Calculus: Chain rule",
+            text="Chain rule: dy/dx = dy/du times du/dx, used to differentiate composite functions",
+            score=0.95,
+            authority_tier=1.0,
+        )
+    ]
+    router = _router_with_queued_responses(
+        [
+            "The capital of France is Paris and bananas are a good source of potassium.",
+            json.dumps({"verdict": "pass", "violations": []}),
+        ]
+    )
+    action = Action(action_type=ActionType.EXPLAIN, move="direct_explanation", reason="test")
+
+    response = await tutor_agent.generate(action, "explain the chain rule", router, retrieved_chunks=chunks)
+
+    assert response.ui_metadata["templated"] is True
+
+
+@pytest.mark.asyncio
+async def test_below_threshold_retrieved_chunks_do_not_trigger_a_grounding_failure():
+    """Regression: retrieved_chunks that never cleared the citation
+    threshold (so nothing was actually cited) must not be grounding-
+    checked at all — checking a draft against irrelevant, sub-threshold
+    candidates would fail almost any real draft for the wrong reason."""
+    weak_chunks = [
+        RetrievedChunk(
+            chunk_id="LO-AA-5.9.1",
+            doc_type=DocType.LEARNING_OBJECTIVE,
+            subtopic_id="calculus.integration.reverse_power_rule",
+            citation="IB DP Mathematics guide, section 5.9",
+            text="Integrate using the reverse of differentiation.",
+            score=0.05,  # well below the grounding threshold
+            authority_tier=1.0,
+        )
+    ]
+    router = _router_with_queued_responses(
+        [
+            "A clean draft that has nothing to do with the weak chunk above.",
+            json.dumps({"verdict": "pass", "violations": []}),
+        ]
+    )
+    action = Action(action_type=ActionType.EXPLAIN, move="direct_explanation", reason="test")
+
+    response = await tutor_agent.generate(action, "explain something", router, retrieved_chunks=weak_chunks)
+
+    assert response.ui_metadata["templated"] is False
+    assert response.citations == []

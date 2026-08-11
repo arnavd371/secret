@@ -1,13 +1,19 @@
 """
-Runnable demo of the reasoning core through Phase 5: a scripted, multi-turn
+Runnable demo of the reasoning core through Phase 6: a scripted, multi-turn
 conversation through `handle_turn`, with a mocked model provider so it runs
 with no API key and no network access. The Router/Intent classification and
 Tutor generation are mocked; the decision policy, hint ladder, CAS
 verification (real SymPy), retrieval (real lexical search over the seed
 knowledge base), question generation (real, quality-gated, CAS-verified
-items), grading (real step segmentation + alignment + mark awarding), and
+items), grading (real step segmentation + alignment + mark awarding),
 memory (real BKT/IRT mastery updates, decay, and budgeted context
-assembly) all run for real.
+assembly), and the Verifier/Critic + grounding check (Phase 6) all run for
+real on every turn — this script's mocked provider auto-passes the
+critic's checklist call so the narrative isn't interrupted by it, but the
+"critique" line printed per turn shows it genuinely ran. Explicit
+block/revise/regenerate scenarios are covered in
+tests/test_integration_critic.py and tests/test_tutor_agent.py instead of
+here, to keep this script's queue bookkeeping manageable.
 
 The chain-rule turns in this script deliberately do NOT pass an explicit
 mastery_estimate override: three correct check_work gradings persist real
@@ -55,10 +61,17 @@ def _intent_json(
 
 
 class ScriptedProvider(ProviderClient):
+    """Phase 6's Verifier/Critic makes an additional, independent model
+    call per turn on the same shared Provider.ANTHROPIC queue. This demo
+    isn't scripting critic behavior, so a critic-shaped system prompt is
+    auto-passed without consuming a slot in the scripted queue."""
+
     def __init__(self, responses: list[str]) -> None:
         self._responses = list(responses)
 
     async def generate(self, *, spec, system, user) -> LLMCallResult:
+        if system.startswith("You are a strict, checklist-driven critic"):
+            return LLMCallResult(text='{"verdict": "pass", "violations": []}', model=spec.model, provider=Provider.ANTHROPIC)
         text = self._responses.pop(0)
         return LLMCallResult(text=text, model=spec.model, provider=Provider.ANTHROPIC)
 
@@ -157,6 +170,12 @@ async def main() -> None:
         print(f"tutor: {blackboard.final_response.text}")
         if blackboard.final_response.citations:
             print(f"citations: {blackboard.final_response.citations}")
+        if "critique_verdict" in blackboard.final_response.ui_metadata:
+            print(
+                f"critique: verdict={blackboard.final_response.ui_metadata['critique_verdict']} "
+                f"degraded={blackboard.final_response.ui_metadata['critic_degraded']} "
+                f"grounding_score={blackboard.final_response.ui_metadata.get('grounding_score')}"
+            )
         print()
 
     mastery = await memory_store.get_mastery("demo-student", CHAIN_RULE_TOPIC)

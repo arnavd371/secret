@@ -6,9 +6,11 @@ Every agent calls `ModelRouter.call(capability=...)` with a capability name
 a provider SDK directly or hardcode a model string — grep for a raw model
 name outside this file and it's a bug.
 
-Phase 1 only needs two capabilities. The map is deliberately small, but the
-shape (capability -> ModelSpec) is what every later phase's agents plug into
-without rework.
+Phase 1 only needed two capabilities; the shape (capability -> ModelSpec)
+is what every later phase's agents plug into without rework — Phase 6
+adds a third, "critic_check", for the independent Verifier/Critic pass
+(spec §2.2 puts this in the same fast/cheap tier as Router/Intent, since
+it's a checklist-style pass, not full generation).
 """
 
 from __future__ import annotations
@@ -46,6 +48,13 @@ CAPABILITY_MODEL_MAP: dict[str, ModelSpec] = {
         max_tokens=1024,
         temperature=0.4,
         timeout_seconds=8.0,
+    ),
+    "critic_check": ModelSpec(
+        provider=Provider.ANTHROPIC,
+        model="claude-haiku-4-5-20251001",
+        max_tokens=256,
+        temperature=0.0,
+        timeout_seconds=3.0,
     ),
 }
 

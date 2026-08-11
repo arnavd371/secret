@@ -1,6 +1,6 @@
-# AI Tutor - Phases 1-5: Reasoning Core, Verification/Retrieval, Question Generation, Grading, Memory
+# AI Tutor - Phases 1-6: Reasoning Core, Verification/Retrieval, Question Generation, Grading, Memory, Quality Control
 
-The intelligence layer for an AI-native IB DP Math AA tutoring assistant, built to the Engineering Blueprint v1.0 spec. Covers Phase 1 (reasoning core), Phase 2 (CAS verification + retrieval), Phase 3 (question generation), Phase 4 (grading / AI examiner), and Phase 5 (student memory system).
+The intelligence layer for an AI-native IB DP Math AA tutoring assistant, built to the Engineering Blueprint v1.0 spec. Covers Phase 1 (reasoning core), Phase 2 (CAS verification + retrieval), Phase 3 (question generation), Phase 4 (grading / AI examiner), Phase 5 (student memory system), and Phase 6 (AI quality control).
 
 ## What this does
 
@@ -42,7 +42,13 @@ Phase 5, memory, persists what each student actually knows across turns and sess
 - A deterministic node-state classifier (unseen, introduced, practicing, consolidating, mastered, decayed) and a budgeted context-assembly function that injects the real mastery summary into the Tutor prompt's STUDENT MASTERY CONTEXT slot, replacing the placeholder every earlier phase left there.
 - The CHALLENGE decision (Phase 3) now reads real persisted mastery instead of a flat default: a student who has actually demonstrated mastery through graded practice gets challenged automatically, with no explicit override needed. A caller can still pass an explicit mastery estimate to override this (useful for tests or a caller with its own signal).
 
-Not built yet: real curriculum/template content beyond the seed set, automatic misconception detection (the registry is real, but nothing populates it yet), IA supervisor, adaptive learning engine, OCR/multimodal input, dense/vector retrieval, a reranker, LLM-authored item variants, IRT recalibration from response history, grade-boundary calibration from historical exam data, human-in-the-loop review/appeals, memory consolidation batch jobs, GDPR export/erasure workflows. These are stubbed with TODOs pointing at the relevant spec section.
+Phase 6, quality control, runs on every Tutor draft that survives the structural leak-check and CAS gate (i.e. anything not already replaced by a templated/CAS-grounded fallback):
+
+- A real, independent second model call (the Verifier/Critic) reviews the draft against a checklist: no answer leaked on a non-EXPLAIN action, no contradiction of the CAS-verified result, no invented content. On a timeout or unparseable response it degrades to a conservative static check (the same leak regex plus a LaTeX-balance check) rather than failing the turn, and says so in the response metadata (`critic_degraded`).
+- A real lexical grounding check: for a draft with citations, flags claims that don't actually overlap with the cited content, so a critic that says "pass" doesn't override an ungrounded draft.
+- A "block" verdict (or a failed grounding check) discards the draft for the templated fallback. A "revise" verdict triggers one bounded regeneration attempt with the critique's violations fed back as stricter constraints, re-checked against every prior gate; if that also fails, it falls back too.
+
+Not built yet: real curriculum/template content beyond the seed set, automatic misconception detection (the registry is real, but nothing populates it yet), IA supervisor, adaptive learning engine, OCR/multimodal input, dense/vector retrieval, a reranker, LLM-authored item variants, IRT recalibration from response history, grade-boundary calibration from historical exam data, human-in-the-loop review/appeals, memory consolidation batch jobs, GDPR export/erasure workflows, self-consistency multi-sampling (the CAS/mark-scheme verification this system already has is a stronger deterministic guarantee for the claims that matter, so this was a considered tradeoff, not an oversight), offline eval harness, online guardrail metrics, regression gating, shadow evaluation. These are stubbed with TODOs pointing at the relevant spec section.
 
 ## Structure
 
@@ -56,6 +62,7 @@ app/
   questions/                item templates, parametric generator, distractors, mark scheme, quality gates
   examiner/                 step segmentation, alignment, mark awarding, grounded comment generation
   memory/                   BKT/IRT mastery, decay, node states, misconception registry, context assembly
+  verifier/                 Verifier/Critic checklist agent, grounding entailment check
   llm/                      model router: one config file for all model names, one call() entrypoint
   session/state.py          hint ladder session state
   orchestrator/             wires everything together into handle_turn()
@@ -72,13 +79,13 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Run the tests (192 tests, all mocked at the model boundary, no API key or network needed; SymPy, retrieval, item generation, grading, and memory math all run for real):
+Run the tests (218 tests, all mocked at the model boundary, no API key or network needed; SymPy, retrieval, item generation, grading, memory math, and the grounding check all run for real):
 
 ```bash
 pytest -q
 ```
 
-Run the scripted demo conversation (shows real mastery climb from three gradings driving a later CHALLENGE decision with no override):
+Run the scripted demo conversation (shows real mastery climb from three gradings driving a later CHALLENGE decision with no override, and a `critique:` line per turn confirming the Verifier/Critic and grounding check ran):
 
 ```bash
 python scripts/run_scripted_conversation.py

@@ -2,9 +2,10 @@
 Tutor agent: generates a response bound to an Action contract.
 
 This is the component the prompt spec is most explicit about NOT letting
-be a naive prompt-and-hope wrapper. Independent structural layers enforce
+be a naive prompt-and-hope wrapper. Independent, layered checks enforce
 the contract — none of them depend on the model having listened to the
-system prompt:
+system prompt, and none of them depend on each other having caught a
+problem first:
 
   1. `_violates_action_contract` (leak-check): a HINT/QUESTION/CHALLENGE
      draft that looks like it states a final numeric/symbolic answer is
@@ -19,15 +20,26 @@ system prompt:
      `ok` and the draft's claimed final value disagrees with it beyond
      the spec's tolerance, the draft is discarded for a response built
      directly from the CAS ground truth instead.
-  3. CHALLENGE items are generated up front by the real Question
-     Generation Engine (app/questions/generator.py) — a CAS-verified,
-     quality-gated `GeneratedItem`, not something the LLM invents. The
-     Tutor's job is only to phrase the handoff; the leak-check backstops
-     it against accidentally revealing the item's answer.
+  3. Grounding check (spec §13.6, app/verifier/grounding.py): for a draft
+     with retrieved_chunks, flags claims not actually supported by the
+     cited context.
+  4. Verifier/Critic (spec §13.5, app/verifier/critic.py): an
+     *independent second model call* — deliberately not the same call as
+     generation (spec §2.8) — that reviews the already-structurally-
+     approved draft. "block" discards it for the templated fallback;
+     "revise" triggers one bounded regeneration attempt with the
+     critique's violations fed back as stricter constraints before
+     falling back if that also fails.
+
+CHALLENGE items are generated up front by the real Question Generation
+Engine (app/questions/generator.py) — a CAS-verified, quality-gated
+`GeneratedItem`, not something the LLM invents. The Tutor's job is only
+to phrase the handoff; layers 1 and 4 both backstop it against
+accidentally revealing the item's answer.
 
 Streaming uses a buffer-then-check strategy: the full draft is assembled
 from the provider (real token streaming when the provider supports it),
-the structural checks run on the complete text, and only the approved
+all of the above checks run on the complete text, and only the approved
 final text is chunked back out to the caller. The checks gate release —
 nothing partial that hasn't passed them is ever emitted.
 """
@@ -49,11 +61,14 @@ from app.cas.models import CASResult, CASStatus
 from app.cas.solver import verify_claim
 from app.knowledge.retriever import RETRIEVAL_SCORE_THRESHOLD, is_grounded
 from app.knowledge.schemas import RetrievedChunk
-from app.memory.models import MemoryReadContext
 from app.llm.client import ModelRouter, ModelUnavailableError
 from app.llm.router_config import get_model_spec
+from app.memory.models import MemoryReadContext
 from app.models.contracts import Action, ActionType, TutorResponse
 from app.questions.models import GeneratedItem
+from app.verifier.critic import critique_draft
+from app.verifier.grounding import check_grounding
+from app.verifier.models import CritiqueVerdict
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +81,6 @@ _LEAK_SENSITIVE_ACTIONS = (ActionType.HINT, ActionType.QUESTION, ActionType.CHAL
 _CAS_GATED_ACTIONS = (ActionType.EXPLAIN,)
 
 # Heuristic patterns for "this looks like a final numeric/symbolic answer".
-# Phase 1 uses regex/heuristics per spec; a real critic model is Phase 6.
 _LEAK_PATTERNS = [
     re.compile(r"\bthe answer is\b", re.IGNORECASE),
     re.compile(r"\bfinal answer\b", re.IGNORECASE),
@@ -144,6 +158,62 @@ def _citations_for(retrieved_chunks: Optional[list[RetrievedChunk]]) -> list[str
     return [chunk.citation for chunk in retrieved_chunks if chunk.score >= RETRIEVAL_SCORE_THRESHOLD]
 
 
+async def _call_tutor_model(system_prompt: str, raw_input: str, router: ModelRouter) -> Optional[str]:
+    spec = get_model_spec("tutor_generate")
+    try:
+        result = await asyncio.wait_for(
+            router.call(capability="tutor_generate", system=system_prompt, user=raw_input),
+            timeout=spec.timeout_seconds,
+        )
+    except (ModelUnavailableError, asyncio.TimeoutError) as exc:
+        logger.warning("Tutor agent generation failed (%s)", exc)
+        return None
+    draft = result.text
+    return draft.strip() if draft and draft.strip() else None
+
+
+async def _regenerate_with_stricter_constraints(
+    action: Action,
+    raw_input: str,
+    router: ModelRouter,
+    violations: list[str],
+    *,
+    cas_result: Optional[CASResult],
+    retrieved_chunks: Optional[list[RetrievedChunk]],
+    challenge_item: Optional[GeneratedItem],
+    memory_context: Optional[MemoryReadContext],
+) -> Optional[str]:
+    """Spec §13.8's escalation policy: one bounded regeneration attempt
+    with the critique's violations fed back as an explicit stricter
+    constraint, re-checked against the exact same structural gates as the
+    original draft. Returns None (never a partial/unchecked draft) if the
+    regeneration also fails any check — the caller falls back to the
+    templated response."""
+    system_prompt = build_system_prompt(
+        action,
+        cas_result=cas_result,
+        retrieved_chunks=retrieved_chunks,
+        challenge_item=challenge_item,
+        memory_context=memory_context,
+    )
+    system_prompt += (
+        "\n\nA prior draft was rejected by an independent reviewer for: "
+        + "; ".join(violations)
+        + ". Regenerate the response, strictly avoiding these issues."
+    )
+
+    draft = await _call_tutor_model(system_prompt, raw_input, router)
+    if draft is None:
+        return None
+    if _violates_action_contract(draft, action, challenge_item):
+        return None
+    if action.action_type in _CAS_GATED_ACTIONS and cas_result is not None and cas_result.status == CASStatus.OK:
+        claimed_value = _extract_claimed_value(draft)
+        if claimed_value is not None and not verify_claim(cas_result, claimed_value):
+            return None
+    return draft
+
+
 async def generate(
     action: Action,
     raw_input: str,
@@ -154,10 +224,10 @@ async def generate(
     challenge_item: Optional[GeneratedItem] = None,
     memory_context: Optional[MemoryReadContext] = None,
 ) -> TutorResponse:
-    """Buffered generation: produce the full draft, run the structural
-    checks, and return either the approved draft or a templated/CAS-
-    grounded fallback. Never raises — every failure path resolves to a
-    valid TutorResponse."""
+    """Buffered generation: produce the full draft, run every structural
+    and verifier check, and return either the approved draft or a
+    templated/CAS-grounded fallback. Never raises — every failure path
+    resolves to a valid TutorResponse."""
 
     if action.action_type == ActionType.REFUSE:
         raise ValueError("REFUSE must be hard-gated by the orchestrator before reaching the Tutor agent")
@@ -169,20 +239,9 @@ async def generate(
         challenge_item=challenge_item,
         memory_context=memory_context,
     )
-    spec = get_model_spec("tutor_generate")
 
-    try:
-        result = await asyncio.wait_for(
-            router.call(capability="tutor_generate", system=system_prompt, user=raw_input),
-            timeout=spec.timeout_seconds,
-        )
-        draft = result.text
-    except (ModelUnavailableError, asyncio.TimeoutError) as exc:
-        logger.warning("Tutor agent generation failed (%s); using templated fallback", exc)
-        return get_fallback_response(action, challenge_item=challenge_item)
-
-    if not draft or not draft.strip():
-        logger.warning("Tutor agent returned empty draft; using templated fallback")
+    draft = await _call_tutor_model(system_prompt, raw_input, router)
+    if draft is None:
         return get_fallback_response(action, challenge_item=challenge_item)
 
     if _violates_action_contract(draft, action, challenge_item):
@@ -195,12 +254,58 @@ async def generate(
 
     cas_gated_response = _apply_cas_gate(draft, action, cas_result)
     if cas_gated_response is not None:
+        # Already a fully-formed, templated/CAS-grounded response — not
+        # freshly-generated LLM prose, so there's nothing for the
+        # Verifier/Critic to usefully re-check here.
         return cas_gated_response
 
+    approved_text = draft
+    # Only chunks that actually clear the citation threshold represent a
+    # real claim of "this response reflects retrieved context" — grounding-
+    # checking the draft against candidates that never qualified (and so
+    # were never cited) would fail almost any draft for the wrong reason.
+    groundable_chunks = retrieved_chunks if retrieved_chunks and is_grounded(retrieved_chunks) else None
+    grounding_result = check_grounding(approved_text, groundable_chunks)
+    critique = await critique_draft(approved_text, action, router, cas_result=cas_result, retrieved_chunks=retrieved_chunks)
+
+    if critique.verdict == CritiqueVerdict.BLOCK or not grounding_result.grounded:
+        logger.warning(
+            "Verifier/Critic rejected draft (verdict=%s, grounded=%s, violations=%s)",
+            critique.verdict.value,
+            grounding_result.grounded,
+            critique.violations,
+        )
+        return get_fallback_response(action, challenge_item=challenge_item)
+
+    if critique.verdict == CritiqueVerdict.REVISE:
+        regenerated = await _regenerate_with_stricter_constraints(
+            action,
+            raw_input,
+            router,
+            critique.violations,
+            cas_result=cas_result,
+            retrieved_chunks=retrieved_chunks,
+            challenge_item=challenge_item,
+            memory_context=memory_context,
+        )
+        if regenerated is None:
+            return get_fallback_response(action, challenge_item=challenge_item)
+        approved_text = regenerated
+        grounding_result = check_grounding(approved_text, groundable_chunks)
+        if not grounding_result.grounded:
+            return get_fallback_response(action, challenge_item=challenge_item)
+
     return TutorResponse(
-        text=draft.strip(),
+        text=approved_text,
         citations=_citations_for(retrieved_chunks),
-        ui_metadata={"action_type": action.action_type.value, "level": action.level, "templated": False},
+        ui_metadata={
+            "action_type": action.action_type.value,
+            "level": action.level,
+            "templated": False,
+            "critique_verdict": critique.verdict.value,
+            "critic_degraded": critique.critic_degraded,
+            "grounding_score": round(grounding_result.score, 4),
+        },
     )
 
 

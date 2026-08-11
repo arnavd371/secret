@@ -20,11 +20,18 @@ from app.memory.store import InMemoryMemoryStore
 
 
 class ScriptedProvider(ProviderClient):
+    """Phase 6's Verifier/Critic makes an additional, independent model
+    call per turn on the same shared Provider.ANTHROPIC queue. These
+    tests aren't exercising critic behavior, so a critic-shaped system
+    prompt is auto-passed without consuming a slot in the scripted queue."""
+
     def __init__(self, responses: list[str]) -> None:
         self._responses = list(responses)
         self.calls: list[dict] = []
 
     async def generate(self, *, spec, system, user) -> LLMCallResult:
+        if system.startswith("You are a strict, checklist-driven critic"):
+            return LLMCallResult(text='{"verdict": "pass", "violations": []}', model=spec.model, provider=Provider.ANTHROPIC)
         self.calls.append({"model": spec.model, "system": system, "user": user})
         text = self._responses.pop(0)
         return LLMCallResult(text=text, model=spec.model, provider=Provider.ANTHROPIC)
