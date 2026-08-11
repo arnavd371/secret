@@ -9,8 +9,11 @@ contract by construction.
 
 from __future__ import annotations
 
+from typing import Optional
+
 from app.cas.models import CASResult
 from app.models.contracts import Action, ActionType, TutorResponse
+from app.questions.models import GeneratedItem
 
 _OFFER_TEXT = {
     "concept_explanation": "explain the underlying concept instead",
@@ -82,7 +85,7 @@ _SUPPORTIVE_SCAFFOLD_FALLBACK = (
 )
 
 
-def get_fallback_response(action: Action) -> TutorResponse:
+def get_fallback_response(action: Action, *, challenge_item: Optional[GeneratedItem] = None) -> TutorResponse:
     if action.action_type == ActionType.REFUSE:
         return build_refusal_response(action)
 
@@ -94,7 +97,7 @@ def get_fallback_response(action: Action) -> TutorResponse:
     elif action.action_type == ActionType.EXPLAIN:
         text = _EXPLAIN_FALLBACKS.get(action.move or "", _EXPLAIN_FALLBACKS["general_response"])
     elif action.action_type == ActionType.CHALLENGE:
-        text = _CHALLENGE_FALLBACK
+        text = _describe_challenge_item(challenge_item) if challenge_item is not None else _CHALLENGE_FALLBACK
     elif action.action_type == ActionType.SUPPORTIVE_SCAFFOLD:
         text = _SUPPORTIVE_SCAFFOLD_FALLBACK
     else:  # pragma: no cover - exhaustive over ActionType
@@ -104,6 +107,15 @@ def get_fallback_response(action: Action) -> TutorResponse:
         text=text,
         citations=[],
         ui_metadata={"action_type": action.action_type.value, "level": action.level, "templated": True},
+    )
+
+
+def _describe_challenge_item(item: GeneratedItem) -> str:
+    """Presents the CAS-verified generated item's stem directly — safe by
+    construction, since it never states the item's own answer."""
+    return (
+        "You've got a solid handle on this — here's a harder one to try: "
+        f"{item.rendered_stem} Give it a go, and let me know what you get."
     )
 
 

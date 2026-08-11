@@ -1,26 +1,28 @@
 """
 The orchestrator: wires Router/Intent -> session state -> decision policy
--> CAS verification + retrieval (when the action can state an answer) ->
+-> CAS verification + retrieval (EXPLAIN) / item generation (CHALLENGE) ->
 Tutor agent (or hard-gated refusal) -> session state update.
 
 `handle_turn` is the only place these components are composed together.
 Every component it calls already owns its own fallback behavior (see
-router_agent.py, tutor_agent.py, cas/solver.py) — the orchestrator's job
-is sequencing and state, not catching stray exceptions from components
-that should have handled their own failure modes already. The one thing
-it enforces itself is the REFUSE hard-gate: that path returns immediately
-and never touches the Tutor agent (or CAS/retrieval) at all.
+router_agent.py, tutor_agent.py, cas/solver.py, questions/generator.py) —
+the orchestrator's job is sequencing and state, not catching stray
+exceptions from components that should have handled their own failure
+modes already. The one thing it enforces itself is the REFUSE hard-gate:
+that path returns immediately and never touches the Tutor agent (or CAS/
+retrieval/generation) at all.
 
-Phase 2 runs CAS verification and retrieval only for EXPLAIN/CHALLENGE —
-the action types spec §1.4/§7.7 permit to state a final answer or a
-syllabus-specific claim at all. QUESTION/HINT/SUPPORTIVE_SCAFFOLD never
-state either, so grounding them would be wasted work; that's a Phase 2
-scoping decision, not a spec requirement to skip it.
+Phase 2/3 ground exactly the action types permitted to use that grounding
+per spec §1.5/§7.7: EXPLAIN may state a syllabus-specific claim or a final
+answer, so it gets CAS verification + retrieval. CHALLENGE poses a new
+problem "instead of full solve" — it never states an answer — so it gets
+a real, CAS-verified extension item from the Question Generation Engine
+instead. QUESTION/HINT/SUPPORTIVE_SCAFFOLD need neither.
 
-Phase 2 still runs a fixed linear sequence rather than the Planner's
-parallel stage graph (spec §6) — Planner, Memory, and Diagnosis agents
-remain later-phase non-goals (see the TODOs on Blackboard's stubbed
-fields in app/models/contracts.py).
+The orchestrator still runs a fixed linear sequence rather than the
+Planner's parallel stage graph (spec §6) — Planner, Memory, and Diagnosis
+agents remain later-phase non-goals (see the TODOs on Blackboard's
+stubbed fields in app/models/contracts.py).
 """
 
 from __future__ import annotations
@@ -40,17 +42,14 @@ from app.llm.client import ModelRouter
 from app.models.contracts import ActionType, Blackboard, DecisionSignals, RawInput
 from app.orchestrator.signals import DEFAULT_MASTERY_ESTIMATE, estimate_frustration, estimate_safety_result
 from app.policy.decision import decide_pedagogical_action
+from app.questions.generator import ItemGenerationError, generate_item_async, select_template_for_topic
+from app.questions.models import GeneratedItem
 from app.session.state import InMemorySessionStateStore, ProblemSessionState, SessionStateStore, advance_session_state
 
 logger = logging.getLogger(__name__)
 
-# Only these action types are permitted to state a final answer or a
-# syllabus-specific claim (spec §1.4, §7.7's HARD CONSTRAINTS), so only
-# these are worth grounding against CAS/retrieval.
-_GROUNDING_ELIGIBLE_ACTIONS = (ActionType.EXPLAIN, ActionType.CHALLENGE)
 
-
-async def _ground_turn(
+async def _ground_explain_turn(
     raw_input: str, topic_hint: Optional[str], knowledge_base: KnowledgeBase
 ) -> tuple[Optional[CASResult], list[RetrievedChunk]]:
     cas_result: Optional[CASResult] = None
@@ -62,6 +61,15 @@ async def _ground_turn(
 
     retrieved_chunks = knowledge_base.retrieve(raw_input, topic_hint=topic_hint)
     return cas_result, retrieved_chunks
+
+
+async def _generate_challenge_item(topic_hint: Optional[str]) -> Optional[GeneratedItem]:
+    template_id = select_template_for_topic(topic_hint)
+    try:
+        return await generate_item_async(template_id)
+    except ItemGenerationError as exc:
+        logger.warning("Question generation failed for template %s (%s); Tutor falls back to a generic extension prompt", template_id, exc)
+        return None
 
 
 async def handle_turn(
@@ -117,8 +125,9 @@ async def handle_turn(
     action = decide_pedagogical_action(signals)
     blackboard.decision_action = action
 
-    # Hard gate: REFUSE short-circuits here. The Tutor agent (and
-    # CAS/retrieval) is never invoked for a REFUSE action, by construction.
+    # Hard gate: REFUSE short-circuits here. The Tutor agent (and CAS/
+    # retrieval/generation) is never invoked for a REFUSE action, by
+    # construction.
     if action.action_type == ActionType.REFUSE:
         response = build_refusal_response(action)
         blackboard.final_response = response
@@ -126,13 +135,23 @@ async def handle_turn(
 
     cas_result: Optional[CASResult] = None
     retrieved_chunks: list[RetrievedChunk] = []
-    if action.action_type in _GROUNDING_ELIGIBLE_ACTIONS:
-        cas_result, retrieved_chunks = await _ground_turn(raw_input, intent_result.topic_hint, knowledge_base)
+    challenge_item: Optional[GeneratedItem] = None
+
+    if action.action_type == ActionType.EXPLAIN:
+        cas_result, retrieved_chunks = await _ground_explain_turn(raw_input, intent_result.topic_hint, knowledge_base)
         blackboard.cas_result = cas_result
         blackboard.retrieved_chunks = retrieved_chunks
+    elif action.action_type == ActionType.CHALLENGE:
+        challenge_item = await _generate_challenge_item(intent_result.topic_hint)
+        blackboard.generated_item = challenge_item
 
     response = await tutor_agent.generate(
-        action, raw_input, router, cas_result=cas_result, retrieved_chunks=retrieved_chunks
+        action,
+        raw_input,
+        router,
+        cas_result=cas_result,
+        retrieved_chunks=retrieved_chunks,
+        challenge_item=challenge_item,
     )
     blackboard.draft_response = response
     blackboard.final_response = response

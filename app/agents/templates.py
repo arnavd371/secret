@@ -12,14 +12,14 @@ structural post-hoc checks in tutor_agent.py — the prompt is the first,
 weaker layer; the regex/CAS gates are the second, real ones that do not
 depend on the model having listened.
 
-RETRIEVED CURRICULUM CONTEXT and CAS-VERIFIED RESULT are now real when
-Phase 2's Retriever/CAS agents found something for this turn (see
-app/knowledge/retriever.py, app/cas/solver.py); when they didn't (e.g. no
-math task was extractable, or no knowledge-base chunk cleared the
-grounding threshold) the slot says so explicitly rather than being
-silently blank, so the model is told not to assert unsupported claims.
-Memory context and misconception diagnosis remain later-phase subsystems
-(§4, §8) that don't exist yet.
+RETRIEVED CURRICULUM CONTEXT and CAS-VERIFIED RESULT are real when Phase 2's
+Retriever/CAS agents found something for this turn; EXTENSION ITEM is real
+when Phase 3's Question Generation Engine produced a CAS-verified item for
+a CHALLENGE action. When any of them didn't apply this turn, the slot says
+so explicitly rather than being silently blank, so the model is told not
+to assert unsupported claims or invent its own extension question. Memory
+context and misconception diagnosis remain later-phase subsystems (§4, §8)
+that don't exist yet.
 """
 
 from __future__ import annotations
@@ -30,6 +30,7 @@ from app.cas.models import CASResult, CASStatus
 from app.knowledge.retriever import RETRIEVAL_SCORE_THRESHOLD, is_grounded
 from app.knowledge.schemas import RetrievedChunk
 from app.models.contracts import Action, ActionType
+from app.questions.models import GeneratedItem
 
 _NOT_YET_AVAILABLE = "(not yet available — Phase 2 has no memory/misconception subsystem)"
 _NO_CAS_TASK = "(no CAS verification was run for this turn — no checkable math task was identified)"
@@ -37,6 +38,7 @@ _NO_GROUNDING = (
     "(no knowledge-base grounding cleared the confidence threshold for this query — do not state "
     "syllabus-specific facts as certain; hedge, or say you can't confirm the IB-specific convention)"
 )
+_NO_EXTENSION_ITEM = "(no extension item was generated for this turn)"
 
 _SKELETON = """You are the teaching agent for an IB Diploma {subject} tutoring system, currently working with a \
 student on {level} content. You must follow the bound pedagogical action exactly.
@@ -47,6 +49,8 @@ ACTIVE MISCONCEPTIONS: {active_misconceptions}
 RETRIEVED CURRICULUM CONTEXT (cite these; do not state syllabus facts not grounded here):
 {retrieved_chunks}
 CAS-VERIFIED RESULT (ground truth; your narrative must not contradict this): {cas_result}
+EXTENSION ITEM (present this verbatim or lightly reworded as the new problem; its answer is for your \
+reference only — never state it): {extension_item}
 
 HARD CONSTRAINTS:
 {hard_constraints}
@@ -75,9 +79,11 @@ _EXPLAIN_CONSTRAINT = (
 )
 
 _CHALLENGE_CONSTRAINT = (
-    "- BOUND ACTION is CHALLENGE: this student has demonstrated high mastery. Pose a harder extension "
-    "question (a variation, edge case, or higher-mark IB-style question) rather than re-explaining basics. "
-    "Do not simply hand them the original problem's solution.\n"
+    "- BOUND ACTION is CHALLENGE: this student has demonstrated high mastery. Present the EXTENSION ITEM "
+    "above as the new problem for them to attempt — do not invent your own, and do not simply hand them the "
+    "original problem's solution.\n"
+    "- You MUST NOT reveal the EXTENSION ITEM's answer, even if asked directly — the student is meant to "
+    "attempt it, this is not an EXPLAIN action.\n"
     "- Never state a mathematical result that disagrees with CAS-VERIFIED RESULT."
 )
 
@@ -111,6 +117,12 @@ def _format_cas_result(cas_result: Optional[CASResult]) -> str:
     return f"operation={cas_result.operation.value}, verified result = {cas_result.result_exact}"
 
 
+def _format_extension_item(item: Optional[GeneratedItem]) -> str:
+    if item is None:
+        return _NO_EXTENSION_ITEM
+    return f"Stem: {item.rendered_stem} | (reference answer, do not state: {item.correct_answer.value})"
+
+
 def build_system_prompt(
     action: Action,
     *,
@@ -118,6 +130,7 @@ def build_system_prompt(
     level: str = "SL",
     cas_result: Optional[CASResult] = None,
     retrieved_chunks: Optional[list[RetrievedChunk]] = None,
+    challenge_item: Optional[GeneratedItem] = None,
 ) -> str:
     if action.action_type == ActionType.REFUSE:
         raise ValueError(
@@ -139,5 +152,6 @@ def build_system_prompt(
         active_misconceptions=_NOT_YET_AVAILABLE,
         retrieved_chunks=_format_retrieved_chunks(retrieved_chunks),
         cas_result=_format_cas_result(cas_result),
+        extension_item=_format_extension_item(challenge_item),
         hard_constraints=hard_constraints,
     )

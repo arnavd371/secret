@@ -6,16 +6,24 @@ be a naive prompt-and-hope wrapper. Independent structural layers enforce
 the contract — none of them depend on the model having listened to the
 system prompt:
 
-  1. `_violates_action_contract` (leak-check): a HINT/QUESTION draft that
-     looks like it states a final numeric/symbolic answer is discarded
-     and replaced with the templated fallback.
-  2. CAS gating (spec §1.4): for EXPLAIN/CHALLENGE — the only action types
+  1. `_violates_action_contract` (leak-check): a HINT/QUESTION/CHALLENGE
+     draft that looks like it states a final numeric/symbolic answer is
+     discarded and replaced with the templated fallback. CHALLENGE is
+     leak-sensitive, not answer-permitted: per spec §1.5's decision table,
+     it poses "challenge/extension question instead of full solve" — the
+     student is meant to attempt the new item, not be handed its answer.
+  2. CAS gating (spec §1.4): for EXPLAIN — the only action type actually
      permitted to state a final answer — if a `cas_result` was computed
      for this turn and is `unverifiable`, the draft is discarded for a
      "can't verify, let's work through it" fallback. If `cas_result` is
      `ok` and the draft's claimed final value disagrees with it beyond
      the spec's tolerance, the draft is discarded for a response built
      directly from the CAS ground truth instead.
+  3. CHALLENGE items are generated up front by the real Question
+     Generation Engine (app/questions/generator.py) — a CAS-verified,
+     quality-gated `GeneratedItem`, not something the LLM invents. The
+     Tutor's job is only to phrase the handoff; the leak-check backstops
+     it against accidentally revealing the item's answer.
 
 Streaming uses a buffer-then-check strategy: the full draft is assembled
 from the provider (real token streaming when the provider supports it),
@@ -31,7 +39,11 @@ import logging
 import re
 from typing import AsyncIterator, Optional
 
-from app.agents.fallback import build_cas_grounded_response, build_cas_unverifiable_response, get_fallback_response
+from app.agents.fallback import (
+    build_cas_grounded_response,
+    build_cas_unverifiable_response,
+    get_fallback_response,
+)
 from app.agents.templates import build_system_prompt
 from app.cas.models import CASResult, CASStatus
 from app.cas.solver import verify_claim
@@ -40,16 +52,17 @@ from app.knowledge.schemas import RetrievedChunk
 from app.llm.client import ModelRouter, ModelUnavailableError
 from app.llm.router_config import get_model_spec
 from app.models.contracts import Action, ActionType, TutorResponse
+from app.questions.models import GeneratedItem
 
 logger = logging.getLogger(__name__)
 
 # Action types where stating the final answer defeats the pedagogical
 # purpose of the action and must be structurally blocked.
-_LEAK_SENSITIVE_ACTIONS = (ActionType.HINT, ActionType.QUESTION)
+_LEAK_SENSITIVE_ACTIONS = (ActionType.HINT, ActionType.QUESTION, ActionType.CHALLENGE)
 
 # Action types permitted to state a final answer at all, and therefore the
 # only ones CAS-gated against a ground-truth result.
-_CAS_GATED_ACTIONS = (ActionType.EXPLAIN, ActionType.CHALLENGE)
+_CAS_GATED_ACTIONS = (ActionType.EXPLAIN,)
 
 # Heuristic patterns for "this looks like a final numeric/symbolic answer".
 # Phase 1 uses regex/heuristics per spec; a real critic model is Phase 6.
@@ -63,7 +76,7 @@ _LEAK_PATTERNS = [
 ]
 
 # Patterns used to extract (not just detect) a claimed final value from an
-# EXPLAIN/CHALLENGE draft, for comparison against the CAS ground truth.
+# EXPLAIN draft, for comparison against the CAS ground truth.
 _FINAL_CLAIM_PATTERNS = [
     re.compile(r"(?:the answer is|final answer(?: is)?|equals)\s*[:\-]?\s*([^\n.]+)", re.IGNORECASE),
     re.compile(r"^\s*[a-zA-Z]\s*=\s*([^\n]+)$", re.MULTILINE),
@@ -72,10 +85,18 @@ _FINAL_CLAIM_PATTERNS = [
 _STREAM_CHUNK_SIZE = 40
 
 
-def _violates_action_contract(draft: str, action: Action) -> bool:
+def _violates_action_contract(draft: str, action: Action, challenge_item: Optional[GeneratedItem]) -> bool:
     if action.action_type not in _LEAK_SENSITIVE_ACTIONS:
         return False
-    return any(pattern.search(draft) for pattern in _LEAK_PATTERNS)
+    if any(pattern.search(draft) for pattern in _LEAK_PATTERNS):
+        return True
+    # A CHALLENGE draft that states the generated item's own verified
+    # answer is just as much a leak as matching the generic patterns above.
+    if action.action_type == ActionType.CHALLENGE and challenge_item is not None:
+        answer_fragment = challenge_item.correct_answer.value.strip()
+        if answer_fragment and answer_fragment in draft:
+            return True
+    return False
 
 
 def _extract_claimed_value(draft: str) -> Optional[str]:
@@ -129,6 +150,7 @@ async def generate(
     *,
     cas_result: Optional[CASResult] = None,
     retrieved_chunks: Optional[list[RetrievedChunk]] = None,
+    challenge_item: Optional[GeneratedItem] = None,
 ) -> TutorResponse:
     """Buffered generation: produce the full draft, run the structural
     checks, and return either the approved draft or a templated/CAS-
@@ -138,7 +160,9 @@ async def generate(
     if action.action_type == ActionType.REFUSE:
         raise ValueError("REFUSE must be hard-gated by the orchestrator before reaching the Tutor agent")
 
-    system_prompt = build_system_prompt(action, cas_result=cas_result, retrieved_chunks=retrieved_chunks)
+    system_prompt = build_system_prompt(
+        action, cas_result=cas_result, retrieved_chunks=retrieved_chunks, challenge_item=challenge_item
+    )
     spec = get_model_spec("tutor_generate")
 
     try:
@@ -149,19 +173,19 @@ async def generate(
         draft = result.text
     except (ModelUnavailableError, asyncio.TimeoutError) as exc:
         logger.warning("Tutor agent generation failed (%s); using templated fallback", exc)
-        return get_fallback_response(action)
+        return get_fallback_response(action, challenge_item=challenge_item)
 
     if not draft or not draft.strip():
         logger.warning("Tutor agent returned empty draft; using templated fallback")
-        return get_fallback_response(action)
+        return get_fallback_response(action, challenge_item=challenge_item)
 
-    if _violates_action_contract(draft, action):
+    if _violates_action_contract(draft, action, challenge_item):
         logger.warning(
             "Tutor agent draft violated action contract for action_type=%s level=%s; discarding",
             action.action_type,
             action.level,
         )
-        return get_fallback_response(action)
+        return get_fallback_response(action, challenge_item=challenge_item)
 
     cas_gated_response = _apply_cas_gate(draft, action, cas_result)
     if cas_gated_response is not None:
@@ -181,10 +205,18 @@ async def stream_response(
     *,
     cas_result: Optional[CASResult] = None,
     retrieved_chunks: Optional[list[RetrievedChunk]] = None,
+    challenge_item: Optional[GeneratedItem] = None,
 ) -> AsyncIterator[str]:
     """Buffer-then-check streaming: the gates in `generate` run on the full
     draft first; only the approved text is ever chunked out to the caller."""
-    response = await generate(action, raw_input, router, cas_result=cas_result, retrieved_chunks=retrieved_chunks)
+    response = await generate(
+        action,
+        raw_input,
+        router,
+        cas_result=cas_result,
+        retrieved_chunks=retrieved_chunks,
+        challenge_item=challenge_item,
+    )
     text = response.text
     for i in range(0, len(text), _STREAM_CHUNK_SIZE):
         yield text[i : i + _STREAM_CHUNK_SIZE]

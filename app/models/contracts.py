@@ -26,6 +26,7 @@ from pydantic import BaseModel, Field
 
 from app.cas.models import CASResult
 from app.knowledge.schemas import RetrievedChunk
+from app.questions.models import GeneratedItem
 
 
 # ---------------------------------------------------------------------------
@@ -215,17 +216,24 @@ class Blackboard(BaseModel):
     # fixed linear sequence instead of a Planner-produced stage graph.
     execution_plan: Optional[dict[str, Any]] = None
     # Populated by the Retriever agent (app/knowledge/retriever.py) when the
-    # decision_action is EXPLAIN/CHALLENGE. TODO(later phase): the real
-    # hybrid BM25+dense+graph+rerank pipeline of §5.6 — this is a lexical
-    # TF/cosine retriever over a small hand-authored seed corpus, not the
-    # full knowledge base.
+    # decision_action is EXPLAIN. TODO(later phase): the real hybrid
+    # BM25+dense+graph+rerank pipeline of §5.6 — this is a lexical
+    # TF-IDF/cosine retriever over a small hand-authored seed corpus, not
+    # the full knowledge base.
     retrieved_chunks: Optional[list[RetrievedChunk]] = None
     # Populated by the Math Solver + CAS agent (app/cas/solver.py) when a
     # math task is extractable from the turn and the decision_action is
-    # EXPLAIN/CHALLENGE. None when no task was extracted this turn.
+    # EXPLAIN. None when no task was extracted this turn.
     cas_result: Optional[CASResult] = None
     # TODO(later phase): populated by the Misconception Diagnostician agent.
     diagnosis_result: Optional[dict[str, Any]] = None
+    # Populated by the Question Generation Engine (app/questions/generator.py)
+    # when the decision_action is CHALLENGE — a real, CAS-verified,
+    # quality-gated extension item, not something the Tutor agent invents.
+    # Not a field named in spec §2.5's Blackboard schema directly; added
+    # here as the natural home for it, same spirit as the schema's other
+    # per-agent-output fields.
+    generated_item: Optional[GeneratedItem] = None
 
     decision_action: Optional[Action] = None
     draft_response: Optional[TutorResponse] = None

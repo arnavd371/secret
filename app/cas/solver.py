@@ -83,6 +83,11 @@ def _describe_differentiation(expr) -> list[str]:
             if args and not (len(args) == 1 and (args[0].is_Symbol or args[0].is_number)):
                 notes.append("chain_rule")
                 break
+        if isinstance(node, sympy.Pow):
+            base = node.args[0]
+            if not (base.is_Symbol or base.is_number):
+                notes.append("chain_rule")
+                break
 
     if not notes:
         notes.append("standard_differentiation_rules")

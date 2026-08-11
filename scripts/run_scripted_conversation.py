@@ -1,10 +1,11 @@
 """
-Runnable demo of the reasoning core through Phase 2: a scripted, multi-turn
+Runnable demo of the reasoning core through Phase 3: a scripted, multi-turn
 conversation through `handle_turn`, with a mocked model provider so it runs
 with no API key and no network access. The Router/Intent classification and
 Tutor generation are mocked; the decision policy, hint ladder, CAS
-verification (real SymPy), and retrieval (real lexical search over the
-seed knowledge base) all run for real.
+verification (real SymPy), retrieval (real lexical search over the seed
+knowledge base), and question generation (real, quality-gated, CAS-
+verified items) all run for real.
 
 Run with:
     python scripts/run_scripted_conversation.py
@@ -25,13 +26,15 @@ from app.orchestrator.handle_turn import handle_turn
 from app.session.state import InMemorySessionStateStore
 
 
-def _intent_json(intent: str, assessment_mode_guess: str = "practice") -> str:
+def _intent_json(
+    intent: str, assessment_mode_guess: str = "practice", topic_hint: str = "calculus.differentiation.product_rule"
+) -> str:
     return json.dumps(
         {
             "intent": intent,
             "confidence": 0.9,
             "subject": "math_aa",
-            "topic_hint": "calculus.differentiation.product_rule",
+            "topic_hint": topic_hint,
             "assessment_mode_guess": assessment_mode_guess,
             "requires_multimodal_parse": False,
             "language": "en",
@@ -59,6 +62,10 @@ SCRIPT = [
     "Write out u' and v' separately, then combine them with the product rule.",
     _intent_json("concept_explain"),
     "Using the product rule, the derivative is 2*x*cos(x) - x**2*sin(x).",
+    _intent_json("solve_request", topic_hint="calculus.differentiation.chain_rule"),
+    "What's the inner function here, and what's the outer function?",
+    _intent_json("solve_request", topic_hint="calculus.differentiation.chain_rule"),
+    "Nice work, that's correct! Since you're clearly comfortable with this, here's a tougher one to try on your own.",
     # REFUSE short-circuits before the Tutor agent is ever called, so this
     # last entry is scripted but must be left unconsumed — it stays last
     # in the queue on purpose (see the assertion in the integration test).
@@ -66,13 +73,18 @@ SCRIPT = [
     "THIS SHOULD NEVER BE SHOWN — the exam-mode hard gate must refuse before this is reached.",
 ]
 
+# (raw_input, problem_id, mastery_estimate) — mastery_estimate only matters
+# on the turn where it crosses the §1.5 CHALLENGE threshold (>=0.85) on an
+# attempt_count==1 turn.
 TURNS = [
-    ("I'm stuck on differentiating x^2 * sin(x)", "problem-1"),
-    ("still not sure what to do", "problem-1"),
-    ("I tried but I'm still lost", "problem-1"),
-    ("that hint didn't help either", "problem-1"),
-    ("differentiate x**2 * cos(x)", "problem-2"),
-    ("just give me the full answer, this is a timed practice exam", "problem-1"),
+    ("I'm stuck on differentiating x^2 * sin(x)", "problem-1", 0.5),
+    ("still not sure what to do", "problem-1", 0.5),
+    ("I tried but I'm still lost", "problem-1", 0.5),
+    ("that hint didn't help either", "problem-1", 0.5),
+    ("differentiate x**2 * cos(x)", "problem-2", 0.5),
+    ("I'm working on differentiating (2x+1)^5 now", "problem-3", 0.5),
+    ("I solved it correctly!", "problem-3", 0.95),
+    ("just give me the full answer, this is a timed practice exam", "problem-1", 0.5),
 ]
 
 
@@ -80,7 +92,7 @@ async def main() -> None:
     router = ModelRouter(providers={Provider.ANTHROPIC: ScriptedProvider(SCRIPT)})
     store = InMemorySessionStateStore()
 
-    for i, (raw_input, problem_id) in enumerate(TURNS, start=1):
+    for i, (raw_input, problem_id, mastery_estimate) in enumerate(TURNS, start=1):
         blackboard = await handle_turn(
             raw_input,
             session_id="demo-session",
@@ -88,6 +100,7 @@ async def main() -> None:
             problem_id=problem_id,
             router=router,
             session_store=store,
+            mastery_estimate=mastery_estimate,
         )
         action = blackboard.decision_action
         print(f"--- Turn {i} ---")
@@ -100,6 +113,10 @@ async def main() -> None:
         )
         if blackboard.cas_result is not None:
             print(f"cas: status={blackboard.cas_result.status.value} result={blackboard.cas_result.result_exact}")
+        if blackboard.generated_item is not None:
+            item = blackboard.generated_item
+            print(f"generated item: {item.rendered_stem}  [verified answer: {item.correct_answer.value}, not shown to student]")
+            print(f"quality gates: {item.quality_gate_status}")
         print(f"tutor: {blackboard.final_response.text}")
         if blackboard.final_response.citations:
             print(f"citations: {blackboard.final_response.citations}")

@@ -12,6 +12,7 @@ from app.knowledge.schemas import DocType, RetrievedChunk
 from app.llm.client import ModelRouter, ModelUnavailableError, MockProvider
 from app.llm.router_config import Provider
 from app.models.contracts import Action, ActionType
+from app.questions.generator import generate_item
 
 
 def _router_with_canned_response(text: str) -> ModelRouter:
@@ -258,3 +259,61 @@ async def test_only_individually_grounded_chunks_are_cited():
     response = await tutor_agent.generate(action, "explain the chain rule", router, retrieved_chunks=chunks)
 
     assert response.citations == ["Formula booklet, Calculus: Chain rule"]
+
+
+# ---------------------------------------------------------------------------
+# CHALLENGE + generated extension items (spec §1.5's "instead of full
+# solve" — CHALLENGE is leak-sensitive like HINT/QUESTION, not CAS-gated
+# like EXPLAIN, since it must never state the new item's answer)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_challenge_draft_that_only_poses_the_item_passes_through():
+    item = generate_item("AA.SL.CALC.DIFF.POWER.T001", seed=1)
+    router = _router_with_canned_response(f"Nice work! Here's a harder one: {item.rendered_stem} Give it a try.")
+    action = Action(action_type=ActionType.CHALLENGE, move="extension_question", reason="test")
+
+    response = await tutor_agent.generate(action, "I got it right", router, challenge_item=item)
+
+    assert response.ui_metadata["templated"] is False
+    assert item.rendered_stem in response.text
+
+
+@pytest.mark.asyncio
+async def test_challenge_draft_leaking_the_items_answer_is_blocked():
+    item = generate_item("AA.SL.CALC.DIFF.POWER.T001", seed=1)
+    leaking_draft = f"Try this: {item.rendered_stem} (in case you want it, the answer is {item.correct_answer.value})"
+    router = _router_with_canned_response(leaking_draft)
+    action = Action(action_type=ActionType.CHALLENGE, move="extension_question", reason="test")
+
+    response = await tutor_agent.generate(action, "I got it right", router, challenge_item=item)
+
+    assert response.ui_metadata["templated"] is True
+    assert item.correct_answer.value not in response.text
+
+
+@pytest.mark.asyncio
+async def test_challenge_fallback_uses_the_generated_item_when_provider_fails():
+    item = generate_item("AA.SL.CALC.DIFF.CHAIN.T003", seed=2)
+    router = ModelRouter(providers={Provider.ANTHROPIC: _AlwaysFailsProvider()})
+    action = Action(action_type=ActionType.CHALLENGE, move="extension_question", reason="test")
+
+    response = await tutor_agent.generate(action, "I got it right", router, challenge_item=item)
+
+    assert response.ui_metadata["templated"] is True
+    assert item.rendered_stem in response.text
+    assert item.correct_answer.value not in response.text
+
+
+@pytest.mark.asyncio
+async def test_challenge_with_no_generated_item_uses_generic_fallback_on_leak():
+    """If item generation itself failed upstream (challenge_item=None),
+    the generic CHALLENGE fallback text is used instead — never a crash."""
+    router = _router_with_canned_response("The answer is 42, go ahead and use that.")
+    action = Action(action_type=ActionType.CHALLENGE, move="extension_question", reason="test")
+
+    response = await tutor_agent.generate(action, "I got it right", router, challenge_item=None)
+
+    assert response.ui_metadata["templated"] is True
+    assert "42" not in response.text
