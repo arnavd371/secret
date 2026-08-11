@@ -15,11 +15,14 @@ depend on the model having listened.
 RETRIEVED CURRICULUM CONTEXT and CAS-VERIFIED RESULT are real when Phase 2's
 Retriever/CAS agents found something for this turn; EXTENSION ITEM is real
 when Phase 3's Question Generation Engine produced a CAS-verified item for
-a CHALLENGE action. When any of them didn't apply this turn, the slot says
-so explicitly rather than being silently blank, so the model is told not
-to assert unsupported claims or invent its own extension question. Memory
-context and misconception diagnosis remain later-phase subsystems (§4, §8)
-that don't exist yet.
+a CHALLENGE action; STUDENT MASTERY CONTEXT / ACTIVE MISCONCEPTIONS are real
+when Phase 5's Memory Agent has a persisted record for the turn's subtopic.
+When any of them didn't apply this turn, the slot says so explicitly rather
+than being silently blank, so the model is told not to assert unsupported
+claims or invent its own extension question. Automatic misconception
+*detection* remains a later-phase non-goal (§8's Misconception
+Diagnostician) — ACTIVE MISCONCEPTIONS only ever reflects what was
+explicitly recorded, never something inferred by the Tutor agent itself.
 """
 
 from __future__ import annotations
@@ -29,10 +32,12 @@ from typing import Optional
 from app.cas.models import CASResult, CASStatus
 from app.knowledge.retriever import RETRIEVAL_SCORE_THRESHOLD, is_grounded
 from app.knowledge.schemas import RetrievedChunk
+from app.memory.models import MemoryReadContext
 from app.models.contracts import Action, ActionType
 from app.questions.models import GeneratedItem
 
-_NOT_YET_AVAILABLE = "(not yet available — Phase 2 has no memory/misconception subsystem)"
+_NO_MEMORY_CONTEXT = "(no mastery history for this subtopic yet)"
+_NO_MISCONCEPTIONS = "(none recorded)"
 _NO_CAS_TASK = "(no CAS verification was run for this turn — no checkable math task was identified)"
 _NO_GROUNDING = (
     "(no knowledge-base grounding cleared the confidence threshold for this query — do not state "
@@ -123,6 +128,18 @@ def _format_extension_item(item: Optional[GeneratedItem]) -> str:
     return f"Stem: {item.rendered_stem} | (reference answer, do not state: {item.correct_answer.value})"
 
 
+def _format_memory_context(memory_context: Optional[MemoryReadContext]) -> str:
+    if memory_context is None or not memory_context.rendered_text:
+        return _NO_MEMORY_CONTEXT
+    return memory_context.rendered_text
+
+
+def _format_active_misconceptions(memory_context: Optional[MemoryReadContext]) -> str:
+    if memory_context is None or not memory_context.active_misconception_ids:
+        return _NO_MISCONCEPTIONS
+    return ", ".join(memory_context.active_misconception_ids)
+
+
 def build_system_prompt(
     action: Action,
     *,
@@ -131,6 +148,7 @@ def build_system_prompt(
     cas_result: Optional[CASResult] = None,
     retrieved_chunks: Optional[list[RetrievedChunk]] = None,
     challenge_item: Optional[GeneratedItem] = None,
+    memory_context: Optional[MemoryReadContext] = None,
 ) -> str:
     if action.action_type == ActionType.REFUSE:
         raise ValueError(
@@ -148,8 +166,8 @@ def build_system_prompt(
         action_type=action.action_type.value.upper(),
         move=action.move or "none",
         hint_level=action.level if action.level is not None else "n/a",
-        memory_read_context=_NOT_YET_AVAILABLE,
-        active_misconceptions=_NOT_YET_AVAILABLE,
+        memory_read_context=_format_memory_context(memory_context),
+        active_misconceptions=_format_active_misconceptions(memory_context),
         retrieved_chunks=_format_retrieved_chunks(retrieved_chunks),
         cas_result=_format_cas_result(cas_result),
         extension_item=_format_extension_item(challenge_item),

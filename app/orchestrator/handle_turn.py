@@ -1,8 +1,9 @@
 """
-The orchestrator: wires Router/Intent -> session state -> decision policy
--> grounding (CAS+retrieval for EXPLAIN, item generation for CHALLENGE,
-real grading for a check_work submission) -> Tutor agent (or hard-gated
-refusal / a fully-graded response) -> session state update.
+The orchestrator: wires Router/Intent -> Memory read -> session state ->
+decision policy -> grounding (CAS+retrieval for EXPLAIN, item generation
+for CHALLENGE, real grading for a check_work submission) -> Tutor agent
+(or hard-gated refusal / a fully-graded response) -> session state update
+-> Memory write-back.
 
 `handle_turn` is the only place these components are composed together.
 Every component it calls already owns its own fallback behavior (see
@@ -11,7 +12,7 @@ examiner/grader.py) — the orchestrator's job is sequencing and state, not
 catching stray exceptions from components that should have handled their
 own failure modes already. The one thing it enforces itself is the
 REFUSE hard-gate: that path returns immediately and never touches the
-Tutor agent (or CAS/retrieval/generation/grading) at all.
+Tutor agent (or CAS/retrieval/generation/grading/memory) at all.
 
 Grounding is matched to what each action type is actually permitted to
 do per spec §1.5/§7.7: EXPLAIN may state a syllabus-specific claim or a
@@ -22,22 +23,31 @@ Engine instead. A check_work turn that includes `student_work` text is
 graded for real by the Examiner (Phase 4): the orchestrator builds the
 mark scheme from the same CAS ground truth Phase 2 already computes, and
 returns the grounded examiner comment directly, bypassing the Tutor LLM
-call entirely — there is nothing for the model to add once the marks are
-computed, and every fact in the comment traces to CAS/the mark scheme.
-Without `student_work`, check_work behaves exactly as it did before this
-phase (a Tutor-generated EXPLAIN response), fully backward compatible.
-QUESTION/HINT/SUPPORTIVE_SCAFFOLD need none of this.
+call entirely. Without `student_work`, check_work behaves exactly as it
+did before Phase 4.
+
+Memory (Phase 5, spec §4) is read at the start of every turn with a
+resolvable topic_hint — the real, persisted mastery estimate for that
+subtopic replaces the flat DEFAULT_MASTERY_ESTIMATE prior (used only when
+no record exists yet), and a deterministic MemoryReadContext is injected
+into the Tutor prompt's STUDENT MASTERY CONTEXT slot. A completed
+check_work grading writes a real BKT/IRT update back, gated by the
+grading's own confidence tier (see app.memory.write_policy) — a caller-
+supplied `mastery_estimate` always overrides the memory-derived value
+(useful for tests/simulation and callers who already have their own
+signal), matching how the parameter already worked in earlier phases.
 
 The orchestrator still runs a fixed linear sequence rather than the
-Planner's parallel stage graph (spec §6) — Planner and Memory agents
-remain later-phase non-goals (see the TODOs on Blackboard's stubbed
-fields in app/models/contracts.py).
+Planner's parallel stage graph (spec §6) — the Planner agent remains a
+later-phase non-goal (see the TODO on Blackboard.execution_plan in
+app/models/contracts.py).
 """
 
 from __future__ import annotations
 
 import logging
 import uuid
+from datetime import datetime, timezone
 from typing import Optional
 
 from app.agents import router_agent, tutor_agent
@@ -46,9 +56,17 @@ from app.cas.extraction import extract_math_task
 from app.cas.models import CASResult, CASStatus
 from app.cas.solver import run_cas_operation_async
 from app.examiner.grader import grade_submission
+from app.examiner.models import MarkResult
 from app.knowledge.retriever import KnowledgeBase, get_default_knowledge_base
 from app.knowledge.schemas import RetrievedChunk
 from app.llm.client import ModelRouter
+from app.memory.bkt import update_bkt
+from app.memory.context_assembly import assemble_memory_context
+from app.memory.decay import effective_mastery
+from app.memory.irt import update_irt
+from app.memory.models import MemoryReadContext, SubtopicMastery
+from app.memory.store import MemoryStore, get_default_memory_store
+from app.memory.write_policy import should_write_mastery_update
 from app.models.contracts import ActionType, Blackboard, DecisionSignals, IntentType, RawInput, TutorResponse
 from app.orchestrator.signals import DEFAULT_MASTERY_ESTIMATE, estimate_frustration, estimate_safety_result
 from app.policy.decision import decide_pedagogical_action
@@ -58,6 +76,16 @@ from app.questions.models import GeneratedItem
 from app.session.state import InMemorySessionStateStore, ProblemSessionState, SessionStateStore, advance_session_state
 
 logger = logging.getLogger(__name__)
+
+# Generic IRT item-difficulty defaults used for check_work-driven mastery
+# updates. Real per-item (a, b) parameters (spec §9.7) exist only for
+# Question Generation Engine items with a known template; an arbitrary
+# CAS-extracted check_work problem has no calibrated difficulty, so a
+# neutral discrimination/difficulty pair is used rather than fabricating
+# a specific one. TODO(later phase): thread real per-item IRT parameters
+# through once check_work problems are linked back to a specific item.
+_GENERIC_IRT_DISCRIMINATION = 1.0
+_GENERIC_IRT_DIFFICULTY = 0.0
 
 
 async def _ground_explain_turn(
@@ -83,7 +111,7 @@ async def _generate_challenge_item(topic_hint: Optional[str]) -> Optional[Genera
         return None
 
 
-async def _grade_check_work_turn(turn_id: str, raw_input: str, student_work: str):  # noqa: ANN201
+async def _grade_check_work_turn(turn_id: str, raw_input: str, student_work: str) -> Optional[MarkResult]:
     """Returns a MarkResult if the problem in `raw_input` was extractable
     and CAS-verifiable, else None — meaning the caller should fall back to
     the normal Tutor-generated EXPLAIN path instead of grading blind."""
@@ -101,6 +129,42 @@ async def _grade_check_work_turn(turn_id: str, raw_input: str, student_work: str
     return grade_submission(f"check-{turn_id}", mark_scheme, student_work, given_expression=math_task.expression)
 
 
+async def _load_memory(
+    student_id: str, topic_hint: Optional[str], memory_store: MemoryStore
+) -> tuple[Optional[SubtopicMastery], MemoryReadContext]:
+    if not topic_hint:
+        return None, MemoryReadContext(rendered_text="(no topic identified for this turn)")
+    mastery = await memory_store.get_mastery(student_id, topic_hint)
+    misconceptions = await memory_store.get_misconceptions(student_id)
+    relevant_misconceptions = [m for m in misconceptions]  # registry is small; no per-subtopic filter modeled yet
+    context = assemble_memory_context(mastery, relevant_misconceptions)
+    return mastery, context
+
+
+async def _write_mastery_from_grading(
+    student_id: str, topic_hint: Optional[str], mark_result: MarkResult, memory_store: MemoryStore
+) -> None:
+    if not topic_hint or not should_write_mastery_update(mark_result.confidence):
+        return
+
+    now = datetime.now(timezone.utc)
+    existing = await memory_store.get_mastery(student_id, topic_hint)
+    mastery = existing or SubtopicMastery(student_id=student_id, subtopic_id=topic_hint)
+
+    correct = mark_result.total_available > 0 and mark_result.total_awarded == mark_result.total_available
+    mastery.p_mastery_bkt = update_bkt(mastery.p_mastery_bkt, correct)
+    mastery.theta_irt, mastery.se_theta = update_irt(
+        mastery.theta_irt, mastery.se_theta, _GENERIC_IRT_DISCRIMINATION, _GENERIC_IRT_DIFFICULTY, correct
+    )
+    mastery.attempts_total += 1
+    if correct:
+        mastery.attempts_correct += 1
+    mastery.last_practiced_at = now
+    mastery.updated_at = now
+
+    await memory_store.save_mastery(mastery)
+
+
 async def handle_turn(
     raw_input: str,
     session_id: str,
@@ -110,7 +174,8 @@ async def handle_turn(
     router: Optional[ModelRouter] = None,
     session_store: Optional[SessionStateStore] = None,
     knowledge_base: Optional[KnowledgeBase] = None,
-    mastery_estimate: float = DEFAULT_MASTERY_ESTIMATE,
+    memory_store: Optional[MemoryStore] = None,
+    mastery_estimate: Optional[float] = None,
     student_work: Optional[str] = None,
 ) -> Blackboard:
     """
@@ -123,10 +188,16 @@ async def handle_turn(
     typed working) graded against the problem extracted from `raw_input`
     when the turn's intent is check_work. Omit it and check_work behaves
     exactly as in earlier phases.
+
+    `mastery_estimate`, if given explicitly, overrides the real
+    memory-derived mastery for this turn (useful for tests/simulation, or
+    a caller that already has its own signal). Left as None (the
+    default), the real persisted mastery for the turn's topic is used.
     """
     router = router or ModelRouter()
     session_store = session_store or InMemorySessionStateStore()
     knowledge_base = knowledge_base or get_default_knowledge_base()
+    memory_store = memory_store or get_default_memory_store()
 
     blackboard = Blackboard(
         turn_id=str(uuid.uuid4()),
@@ -141,6 +212,16 @@ async def handle_turn(
     safety_result = estimate_safety_result(raw_input, intent_result.assessment_mode_guess)
     blackboard.safety_result = safety_result
 
+    mastery_record, memory_context = await _load_memory(student_id, intent_result.topic_hint, memory_store)
+    blackboard.student_state_snapshot = memory_context
+
+    if mastery_estimate is not None:
+        resolved_mastery_estimate = mastery_estimate
+    elif mastery_record is not None:
+        resolved_mastery_estimate = effective_mastery(mastery_record.p_mastery_bkt, mastery_record.last_practiced_at)
+    else:
+        resolved_mastery_estimate = DEFAULT_MASTERY_ESTIMATE
+
     prev_state = await session_store.get(session_id, problem_id)
     problem_changed = problem_id is not None and problem_id != prev_state.problem_id
     current_state = (
@@ -149,7 +230,7 @@ async def handle_turn(
 
     signals = DecisionSignals(
         intent=intent_result.intent,
-        mastery_estimate=mastery_estimate,
+        mastery_estimate=resolved_mastery_estimate,
         assessment_mode=intent_result.assessment_mode_guess,
         integrity_risk=safety_result.integrity_risk,
         attempt_count=current_state.attempt_count,
@@ -176,6 +257,7 @@ async def handle_turn(
         mark_result = await _grade_check_work_turn(blackboard.turn_id, raw_input, student_work)
         if mark_result is not None:
             blackboard.mark_result = mark_result
+            await _write_mastery_from_grading(student_id, intent_result.topic_hint, mark_result, memory_store)
             response = TutorResponse(
                 text=mark_result.comment,
                 citations=[],
@@ -212,6 +294,7 @@ async def handle_turn(
         cas_result=cas_result,
         retrieved_chunks=retrieved_chunks,
         challenge_item=challenge_item,
+        memory_context=memory_context,
     )
     blackboard.draft_response = response
     blackboard.final_response = response

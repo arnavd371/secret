@@ -49,6 +49,7 @@ from app.cas.models import CASResult, CASStatus
 from app.cas.solver import verify_claim
 from app.knowledge.retriever import RETRIEVAL_SCORE_THRESHOLD, is_grounded
 from app.knowledge.schemas import RetrievedChunk
+from app.memory.models import MemoryReadContext
 from app.llm.client import ModelRouter, ModelUnavailableError
 from app.llm.router_config import get_model_spec
 from app.models.contracts import Action, ActionType, TutorResponse
@@ -151,6 +152,7 @@ async def generate(
     cas_result: Optional[CASResult] = None,
     retrieved_chunks: Optional[list[RetrievedChunk]] = None,
     challenge_item: Optional[GeneratedItem] = None,
+    memory_context: Optional[MemoryReadContext] = None,
 ) -> TutorResponse:
     """Buffered generation: produce the full draft, run the structural
     checks, and return either the approved draft or a templated/CAS-
@@ -161,7 +163,11 @@ async def generate(
         raise ValueError("REFUSE must be hard-gated by the orchestrator before reaching the Tutor agent")
 
     system_prompt = build_system_prompt(
-        action, cas_result=cas_result, retrieved_chunks=retrieved_chunks, challenge_item=challenge_item
+        action,
+        cas_result=cas_result,
+        retrieved_chunks=retrieved_chunks,
+        challenge_item=challenge_item,
+        memory_context=memory_context,
     )
     spec = get_model_spec("tutor_generate")
 
@@ -206,6 +212,7 @@ async def stream_response(
     cas_result: Optional[CASResult] = None,
     retrieved_chunks: Optional[list[RetrievedChunk]] = None,
     challenge_item: Optional[GeneratedItem] = None,
+    memory_context: Optional[MemoryReadContext] = None,
 ) -> AsyncIterator[str]:
     """Buffer-then-check streaming: the gates in `generate` run on the full
     draft first; only the approved text is ever chunked out to the caller."""
@@ -216,6 +223,7 @@ async def stream_response(
         cas_result=cas_result,
         retrieved_chunks=retrieved_chunks,
         challenge_item=challenge_item,
+        memory_context=memory_context,
     )
     text = response.text
     for i in range(0, len(text), _STREAM_CHUNK_SIZE):

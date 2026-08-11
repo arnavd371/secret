@@ -1,6 +1,6 @@
-# AI Tutor - Phases 1-4: Reasoning Core, Verification/Retrieval, Question Generation, Grading
+# AI Tutor - Phases 1-5: Reasoning Core, Verification/Retrieval, Question Generation, Grading, Memory
 
-The intelligence layer for an AI-native IB DP Math AA tutoring assistant, built to the Engineering Blueprint v1.0 spec. Covers Phase 1 (reasoning core), Phase 2 (CAS verification + retrieval), Phase 3 (question generation), and Phase 4 (grading / AI examiner).
+The intelligence layer for an AI-native IB DP Math AA tutoring assistant, built to the Engineering Blueprint v1.0 spec. Covers Phase 1 (reasoning core), Phase 2 (CAS verification + retrieval), Phase 3 (question generation), Phase 4 (grading / AI examiner), and Phase 5 (student memory system).
 
 ## What this does
 
@@ -35,7 +35,14 @@ Phase 4, grading, runs for check_work when the student's typed working is provid
 - Builds a grounded examiner comment directly from the mark breakdown, no LLM call, no unsupported claims. This response bypasses the Tutor LLM entirely: once the marks are computed there's nothing left for a model to add.
 - Scores a confidence tier (high/medium/low) so low-confidence gradings can be flagged for review later.
 
-Not built yet: real curriculum/template content beyond the seed set, persisted mastery model, IA supervisor, adaptive learning engine, OCR/multimodal input, dense/vector retrieval, a reranker, LLM-authored item variants, IRT recalibration from response history, grade-boundary calibration from historical exam data, human-in-the-loop review/appeals. These are stubbed with TODOs pointing at the relevant spec section.
+Phase 5, memory, persists what each student actually knows across turns and sessions:
+
+- Real Bayesian Knowledge Tracing (fast per-subtopic mastery) and Item Response Theory (slow-updating ability estimate) updates, exact formulas from the spec, applied after every confidently-graded check_work submission. Low-confidence gradings never write a mastery update, so a bad or incomplete submission can't corrupt the model.
+- Real exponential decay toward a floor for stale mastery, and separate decay for a per-student misconception registry.
+- A deterministic node-state classifier (unseen, introduced, practicing, consolidating, mastered, decayed) and a budgeted context-assembly function that injects the real mastery summary into the Tutor prompt's STUDENT MASTERY CONTEXT slot, replacing the placeholder every earlier phase left there.
+- The CHALLENGE decision (Phase 3) now reads real persisted mastery instead of a flat default: a student who has actually demonstrated mastery through graded practice gets challenged automatically, with no explicit override needed. A caller can still pass an explicit mastery estimate to override this (useful for tests or a caller with its own signal).
+
+Not built yet: real curriculum/template content beyond the seed set, automatic misconception detection (the registry is real, but nothing populates it yet), IA supervisor, adaptive learning engine, OCR/multimodal input, dense/vector retrieval, a reranker, LLM-authored item variants, IRT recalibration from response history, grade-boundary calibration from historical exam data, human-in-the-loop review/appeals, memory consolidation batch jobs, GDPR export/erasure workflows. These are stubbed with TODOs pointing at the relevant spec section.
 
 ## Structure
 
@@ -48,6 +55,7 @@ app/
   knowledge/                seed curriculum content + TF-IDF retriever
   questions/                item templates, parametric generator, distractors, mark scheme, quality gates
   examiner/                 step segmentation, alignment, mark awarding, grounded comment generation
+  memory/                   BKT/IRT mastery, decay, node states, misconception registry, context assembly
   llm/                      model router: one config file for all model names, one call() entrypoint
   session/state.py          hint ladder session state
   orchestrator/             wires everything together into handle_turn()
@@ -64,13 +72,13 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Run the tests (151 tests, all mocked at the model boundary, no API key or network needed; SymPy, retrieval, item generation, and grading all run for real):
+Run the tests (192 tests, all mocked at the model boundary, no API key or network needed; SymPy, retrieval, item generation, grading, and memory math all run for real):
 
 ```bash
 pytest -q
 ```
 
-Run the scripted demo conversation:
+Run the scripted demo conversation (shows real mastery climb from three gradings driving a later CHALLENGE decision with no override):
 
 ```bash
 python scripts/run_scripted_conversation.py

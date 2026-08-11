@@ -17,12 +17,15 @@ string matching.
 
 from __future__ import annotations
 
+from app.memory.bkt import P_INIT_DEFAULT
 from app.models.contracts import AssessmentMode, FrustrationLevel, IntegrityRisk, SafetyResult
 
-# TODO(Phase 5): source from a persisted per-student mastery model instead
-# of a flat neutral prior. Callers that already have a real estimate (e.g.
-# a future mastery service) should pass it into handle_turn explicitly.
-DEFAULT_MASTERY_ESTIMATE = 0.5
+# Fallback prior used only when the Phase 5 Memory Agent has no persisted
+# mastery record yet for the turn's subtopic (a brand-new student, or a
+# turn with no resolvable topic_hint at all) — the real per-subtopic BKT
+# p_init default (spec §4.3), not the flat 0.5 "neutral prior" this
+# constant held before the Memory Agent existed to source a real value.
+DEFAULT_MASTERY_ESTIMATE = P_INIT_DEFAULT
 
 _HIGH_RISK_PHRASES = (
     "give me the full answer",

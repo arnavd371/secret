@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field
 from app.cas.models import CASResult
 from app.examiner.models import MarkResult
 from app.knowledge.schemas import RetrievedChunk
+from app.memory.models import MemoryReadContext
 from app.questions.models import GeneratedItem
 
 
@@ -211,8 +212,13 @@ class Blackboard(BaseModel):
     intent_result: Optional[IntentResult] = None
     safety_result: Optional[SafetyResult] = None
 
-    # TODO(Phase 5): LearnerModel summary loaded by the Memory agent.
-    student_state_snapshot: Optional[dict[str, Any]] = None
+    # Populated by the Memory agent (app/memory/context_assembly.py) when
+    # the turn's topic_hint resolves to a persisted mastery record — the
+    # spec's own "LearnerModel summary, §4.2" field, now the real
+    # deterministic budgeted-context-assembly output of §4.12 rather than
+    # a stub. None when no topic_hint was available or no record exists
+    # yet for this student/subtopic.
+    student_state_snapshot: Optional[MemoryReadContext] = None
     # TODO: Planner agent isn't built in Phase 1 — the orchestrator runs a
     # fixed linear sequence instead of a Planner-produced stage graph.
     execution_plan: Optional[dict[str, Any]] = None
