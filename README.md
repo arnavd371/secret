@@ -1,6 +1,6 @@
-# AI Tutor - Phases 1-3: Reasoning Core, Verification/Retrieval, Question Generation
+# AI Tutor - Phases 1-4: Reasoning Core, Verification/Retrieval, Question Generation, Grading
 
-The intelligence layer for an AI-native IB DP Math AA tutoring assistant, built to the Engineering Blueprint v1.0 spec. Covers Phase 1 (reasoning core), Phase 2 (CAS verification + retrieval), and Phase 3 (question generation).
+The intelligence layer for an AI-native IB DP Math AA tutoring assistant, built to the Engineering Blueprint v1.0 spec. Covers Phase 1 (reasoning core), Phase 2 (CAS verification + retrieval), Phase 3 (question generation), and Phase 4 (grading / AI examiner).
 
 ## What this does
 
@@ -27,7 +27,15 @@ Phase 3, question generation, runs for CHALLENGE (a high-mastery student gets a 
 - Builds a mark scheme directly from the CAS solution steps.
 - The Tutor agent presents the generated item as the new problem to attempt. The item's own answer is never revealed, same structural enforcement as HINT/QUESTION.
 
-Not built yet: real curriculum/template content beyond the seed set, grading, persisted mastery model, IA supervisor, adaptive learning engine, OCR/multimodal input, dense/vector retrieval, a reranker, LLM-authored item variants, IRT recalibration from response history. These are stubbed with TODOs pointing at the relevant spec section.
+Phase 4, grading, runs for check_work when the student's typed working is provided alongside the problem:
+
+- Segments the submission into discrete steps (algebraic manipulation, final answer, justification, restatement of the given) and checks each against the mark scheme using real symbolic equivalence, not string matching.
+- Awards accuracy marks by matching a step's value to the CAS-computed answer (including multi-root answers like a quadratic's two solutions, matched as a set across the submission). Awards method marks by a documented heuristic (real intermediate working shown, not just the given restated).
+- Flags a correct final answer with too little supporting work as unsupported, with a real coverage threshold.
+- Builds a grounded examiner comment directly from the mark breakdown, no LLM call, no unsupported claims. This response bypasses the Tutor LLM entirely: once the marks are computed there's nothing left for a model to add.
+- Scores a confidence tier (high/medium/low) so low-confidence gradings can be flagged for review later.
+
+Not built yet: real curriculum/template content beyond the seed set, persisted mastery model, IA supervisor, adaptive learning engine, OCR/multimodal input, dense/vector retrieval, a reranker, LLM-authored item variants, IRT recalibration from response history, grade-boundary calibration from historical exam data, human-in-the-loop review/appeals. These are stubbed with TODOs pointing at the relevant spec section.
 
 ## Structure
 
@@ -39,6 +47,7 @@ app/
   cas/                      Math Solver + CAS agent: SymPy solver, verify_claim, task extraction from text
   knowledge/                seed curriculum content + TF-IDF retriever
   questions/                item templates, parametric generator, distractors, mark scheme, quality gates
+  examiner/                 step segmentation, alignment, mark awarding, grounded comment generation
   llm/                      model router: one config file for all model names, one call() entrypoint
   session/state.py          hint ladder session state
   orchestrator/             wires everything together into handle_turn()
@@ -55,7 +64,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Run the tests (131 tests, all mocked at the model boundary, no API key or network needed; SymPy, retrieval, and item generation all run for real):
+Run the tests (151 tests, all mocked at the model boundary, no API key or network needed; SymPy, retrieval, item generation, and grading all run for real):
 
 ```bash
 pytest -q

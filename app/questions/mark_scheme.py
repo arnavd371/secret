@@ -37,6 +37,7 @@ def build_mark_scheme(item_id: str, cas_result: CASResult) -> MarkScheme:
             type="A",
             text=f"correct final answer: {cas_result.result_exact}",
             marks=1,
+            expected_value=cas_result.result_exact,
         )
     )
 

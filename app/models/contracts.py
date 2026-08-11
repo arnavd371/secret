@@ -25,6 +25,7 @@ from typing import Any, Optional, Union
 from pydantic import BaseModel, Field
 
 from app.cas.models import CASResult
+from app.examiner.models import MarkResult
 from app.knowledge.schemas import RetrievedChunk
 from app.questions.models import GeneratedItem
 
@@ -234,6 +235,12 @@ class Blackboard(BaseModel):
     # here as the natural home for it, same spirit as the schema's other
     # per-agent-output fields.
     generated_item: Optional[GeneratedItem] = None
+    # Populated by the Grader/Examiner agent (app/examiner/grader.py) when
+    # the turn is a check_work submission accompanied by student_work text
+    # and the problem it's checking against was extractable via CAS. Not a
+    # field named in spec §2.5's Blackboard schema directly, same rationale
+    # as generated_item above.
+    mark_result: Optional[MarkResult] = None
 
     decision_action: Optional[Action] = None
     draft_response: Optional[TutorResponse] = None

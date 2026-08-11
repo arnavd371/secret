@@ -104,6 +104,15 @@ class MarkSchemeNode(BaseModel):
     type: Literal["M", "A"]
     text: str
     marks: int = 1
+    # Set for "A" (accuracy) nodes, where the expected value is a single,
+    # CAS-computed quantity a student step can be symbolically checked
+    # against (spec §10.3's alignment algorithm). Left None for "M"
+    # (method) nodes — checking whether a step demonstrates a specific
+    # *method* rather than a specific *value* needs the fuller per-node
+    # solution-graph (spec §8.3's step-diff algorithm), a later phase;
+    # the Examiner (app/examiner/) awards M-marks by a documented
+    # simplified heuristic instead.
+    expected_value: Optional[str] = None
 
 
 class MarkScheme(BaseModel):
