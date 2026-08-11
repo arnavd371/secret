@@ -28,6 +28,7 @@ from app.cas.models import CASResult
 from app.examiner.models import MarkResult
 from app.knowledge.schemas import RetrievedChunk
 from app.memory.models import MemoryReadContext
+from app.multimodal.models import IngestionResult
 from app.questions.models import GeneratedItem
 
 
@@ -247,6 +248,14 @@ class Blackboard(BaseModel):
     # field named in spec §2.5's Blackboard schema directly, same rationale
     # as generated_item above.
     mark_result: Optional[MarkResult] = None
+    # Populated by the multimodal ingestion pipeline (app/multimodal/pipeline.py,
+    # spec §3.2) when the turn arrives with a `student_work_image` — real
+    # intake validation, PIL preprocessing, vision-model OCR, LaTeX
+    # normalization, expression-parseability check, and composite
+    # confidence scoring. None when the turn had no image. Same rationale
+    # as generated_item/mark_result above: not a field named in spec
+    # §2.5's Blackboard schema directly, added as the natural home for it.
+    ingestion_result: Optional[IngestionResult] = None
 
     decision_action: Optional[Action] = None
     draft_response: Optional[TutorResponse] = None

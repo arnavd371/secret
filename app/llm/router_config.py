@@ -10,7 +10,10 @@ Phase 1 only needed two capabilities; the shape (capability -> ModelSpec)
 is what every later phase's agents plug into without rework — Phase 6
 adds a third, "critic_check", for the independent Verifier/Critic pass
 (spec §2.2 puts this in the same fast/cheap tier as Router/Intent, since
-it's a checklist-style pass, not full generation).
+it's a checklist-style pass, not full generation). Phase 7 adds a fourth,
+"math_ocr", for the multimodal ingestion pipeline's vision call (spec
+§3.2 and §14.2: no specialized math-OCR service like Mathpix is wired up,
+so a general vision-capable model is the documented, acceptable fallback).
 """
 
 from __future__ import annotations
@@ -55,6 +58,13 @@ CAPABILITY_MODEL_MAP: dict[str, ModelSpec] = {
         max_tokens=256,
         temperature=0.0,
         timeout_seconds=3.0,
+    ),
+    "math_ocr": ModelSpec(
+        provider=Provider.ANTHROPIC,
+        model="claude-sonnet-5",
+        max_tokens=1024,
+        temperature=0.0,
+        timeout_seconds=12.0,
     ),
 }
 

@@ -29,7 +29,7 @@ class ScriptedProvider(ProviderClient):
         self._responses = list(responses)
         self.calls: list[dict] = []
 
-    async def generate(self, *, spec, system, user) -> LLMCallResult:
+    async def generate(self, *, spec, system, user, images=None) -> LLMCallResult:
         if system.startswith("You are a strict, checklist-driven critic"):
             return LLMCallResult(text='{"verdict": "pass", "violations": []}', model=spec.model, provider=Provider.ANTHROPIC)
         self.calls.append({"model": spec.model, "system": system, "user": user})

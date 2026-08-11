@@ -30,7 +30,7 @@ class _QueuedProvider(ProviderClient):
     def __init__(self, responses: list[str]) -> None:
         self._responses = list(responses)
 
-    async def generate(self, *, spec, system, user) -> LLMCallResult:
+    async def generate(self, *, spec, system, user, images=None) -> LLMCallResult:
         text = self._responses.pop(0)
         return LLMCallResult(text=text, model=spec.model, provider=Provider.ANTHROPIC)
 
@@ -40,7 +40,7 @@ def _router_with_queued_responses(responses: list[str]) -> ModelRouter:
 
 
 class _AlwaysFailsProvider:
-    async def generate(self, *, spec, system, user):
+    async def generate(self, *, spec, system, user, images=None):
         raise ModelUnavailableError("simulated provider outage")
 
     async def stream(self, *, spec, system, user):
@@ -419,7 +419,7 @@ async def test_critic_revise_verdict_falls_back_when_regeneration_provider_fails
         def __init__(self) -> None:
             self._responses = ["An okay draft.", json.dumps({"verdict": "revise", "violations": ["needs more detail"]})]
 
-        async def generate(self, *, spec, system, user) -> LLMCallResult:
+        async def generate(self, *, spec, system, user, images=None) -> LLMCallResult:
             if not self._responses:
                 raise ModelUnavailableError("simulated outage on regeneration attempt")
             text = self._responses.pop(0)

@@ -24,7 +24,7 @@ class QueuedProvider(ProviderClient):
         self._responses = list(responses)
         self.calls: list[dict] = []
 
-    async def generate(self, *, spec, system, user) -> LLMCallResult:
+    async def generate(self, *, spec, system, user, images=None) -> LLMCallResult:
         self.calls.append({"model": spec.model, "system": system})
         text = self._responses.pop(0)
         return LLMCallResult(text=text, model=spec.model, provider=Provider.ANTHROPIC)

@@ -51,7 +51,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from app.agents import router_agent, tutor_agent
-from app.agents.fallback import build_refusal_response
+from app.agents.fallback import build_multimodal_confirmation_response, build_refusal_response
 from app.cas.extraction import extract_math_task
 from app.cas.models import CASResult, CASStatus
 from app.cas.solver import run_cas_operation_async
@@ -68,6 +68,7 @@ from app.memory.models import MemoryReadContext, SubtopicMastery
 from app.memory.store import MemoryStore, get_default_memory_store
 from app.memory.write_policy import should_write_mastery_update
 from app.models.contracts import ActionType, Blackboard, DecisionSignals, IntentType, RawInput, TutorResponse
+from app.multimodal.pipeline import ingest_image
 from app.orchestrator.signals import DEFAULT_MASTERY_ESTIMATE, estimate_frustration, estimate_safety_result
 from app.policy.decision import decide_pedagogical_action
 from app.questions.generator import ItemGenerationError, generate_item_async, select_template_for_topic
@@ -177,6 +178,7 @@ async def handle_turn(
     memory_store: Optional[MemoryStore] = None,
     mastery_estimate: Optional[float] = None,
     student_work: Optional[str] = None,
+    student_work_image: Optional[bytes] = None,
 ) -> Blackboard:
     """
     Returns the fully populated Blackboard for the turn (not just the bare
@@ -188,6 +190,16 @@ async def handle_turn(
     typed working) graded against the problem extracted from `raw_input`
     when the turn's intent is check_work. Omit it and check_work behaves
     exactly as in earlier phases.
+
+    `student_work_image` (Phase 7, spec §3.2) is an optional photo of the
+    student's work, used only when `student_work` text wasn't already
+    supplied directly. It's run through the real multimodal ingestion
+    pipeline (app/multimodal/pipeline.py): a HIGH-confidence transcription
+    is graded exactly as if the student had typed it; anything else
+    (intake rejection, an OCR outage, or a MEDIUM/LOW-confidence
+    transcription) short-circuits with a templated response asking the
+    student to confirm what was read, retype, or retake the photo — the
+    Tutor LLM is never asked to grade an unconfirmed transcription.
 
     `mastery_estimate`, if given explicitly, overrides the real
     memory-derived mastery for this turn (useful for tests/simulation, or
@@ -248,6 +260,20 @@ async def handle_turn(
         response = build_refusal_response(action)
         blackboard.final_response = response
         return blackboard
+
+    # A photographed submission is turned into text before grading can even
+    # be attempted. Only runs when the caller didn't already supply typed
+    # student_work directly (typed text always wins over re-OCRing a photo).
+    if intent_result.intent == IntentType.CHECK_WORK and student_work_image is not None and not student_work:
+        ingestion = await ingest_image(router, student_work_image)
+        blackboard.ingestion_result = ingestion
+        if ingestion.rejected or ingestion.requires_confirmation or not ingestion.student_work:
+            response = build_multimodal_confirmation_response(action, ingestion)
+            blackboard.final_response = response
+            new_state = advance_session_state(current_state, problem_id, intent_result.intent, action)
+            await session_store.save(new_state)
+            return blackboard
+        student_work = ingestion.student_work
 
     # Real grading path: a check_work turn with student_work attached is
     # graded directly, bypassing the Tutor LLM call entirely. Falls

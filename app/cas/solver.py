@@ -58,6 +58,21 @@ def _parse(expression: str):
     return parse_expr(expression, transformations=_TRANSFORMATIONS)
 
 
+def try_parse_expression(expression: str) -> Optional[sympy.Expr]:
+    """Public, non-raising wrapper around `_parse` (spec §2.2's expression
+    parser, same transformations: implicit multiplication, `^` as power).
+    Phase 7's multimodal pipeline (app/multimodal/expression_parse.py)
+    reuses this directly rather than standing up a second math parser —
+    "does this parse as a real expression" is exactly the same question
+    whether the text came from a chat message or an OCR transcription."""
+    if not expression or not expression.strip():
+        return None
+    try:
+        return _parse(expression)
+    except Exception:  # noqa: BLE001 - any parse failure means "not parseable"
+        return None
+
+
 def _unverifiable(operation: CASOperation, expression: str, exc: Exception) -> CASResult:
     logger.warning("CAS operation %s failed on %r: %s", operation.value, expression, exc)
     return CASResult(

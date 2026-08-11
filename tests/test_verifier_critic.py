@@ -19,7 +19,7 @@ def _router_with_canned_response(text: str) -> ModelRouter:
 
 
 class _AlwaysFailsProvider:
-    async def generate(self, *, spec, system, user):
+    async def generate(self, *, spec, system, user, images=None):
         raise ModelUnavailableError("simulated critic outage")
 
 

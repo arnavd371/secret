@@ -13,7 +13,7 @@ def _router_with_json_response(payload: dict) -> ModelRouter:
 
 
 class _AlwaysFailsProvider:
-    async def generate(self, *, spec, system, user):
+    async def generate(self, *, spec, system, user, images=None):
         raise ModelUnavailableError("simulated outage")
 
 

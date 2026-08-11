@@ -13,6 +13,7 @@ from typing import Optional
 
 from app.cas.models import CASResult
 from app.models.contracts import Action, ActionType, TutorResponse
+from app.multimodal.models import IngestionResult, IntakeRejectionReason
 from app.questions.models import GeneratedItem
 
 _OFFER_TEXT = {
@@ -134,6 +135,53 @@ def build_cas_unverifiable_response(action: Action) -> TutorResponse:
         text=text,
         citations=[],
         ui_metadata={"action_type": action.action_type.value, "cas_status": "unverifiable", "templated": True},
+    )
+
+
+_INTAKE_REJECTION_TEXT = {
+    IntakeRejectionReason.UNSUPPORTED_FORMAT: "that file format isn't supported (please use PNG or JPEG)",
+    IntakeRejectionReason.CORRUPT_IMAGE: "the image couldn't be read (it may be corrupted or empty)",
+    IntakeRejectionReason.TOO_LARGE_BYTES: "that file is too large to upload",
+    IntakeRejectionReason.DIMENSIONS_TOO_SMALL: "that image is too small to read reliably",
+    IntakeRejectionReason.DIMENSIONS_TOO_LARGE: "that image is too large to process",
+}
+
+
+def build_multimodal_confirmation_response(action: Action, ingestion: IngestionResult) -> TutorResponse:
+    """
+    Spec §3.2's three-tier confidence gate, surfaced as a real response:
+    used whenever a photo of student work couldn't be turned into
+    trusted `student_work` text on its own — either intake rejected it
+    outright, the vision call itself failed, or the OCR transcription's
+    confidence tier came back MEDIUM or LOW. HIGH-confidence
+    transcriptions never reach this function; they're graded directly.
+    """
+    if ingestion.rejected:
+        reason_text = _INTAKE_REJECTION_TEXT.get(ingestion.rejection_reason, "I couldn't process that image")
+        text = (
+            f"I couldn't use that photo because {reason_text}. Could you try again with a clearer photo, "
+            "or type your work instead?"
+        )
+    elif ingestion.student_work:
+        text = (
+            "Here's what I read from your photo:\n\n"
+            f"{ingestion.student_work}\n\n"
+            "Does that look right? Reply to confirm it, or send a corrected version, and I'll grade it."
+        )
+    else:
+        text = (
+            "I couldn't confidently read that photo. Could you retake it with better lighting or focus, "
+            "or type your work instead?"
+        )
+
+    return TutorResponse(
+        text=text,
+        citations=[],
+        ui_metadata={
+            "action_type": action.action_type.value,
+            "multimodal_requires_confirmation": True,
+            "templated": True,
+        },
     )
 
 

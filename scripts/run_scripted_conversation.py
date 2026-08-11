@@ -1,17 +1,19 @@
 """
-Runnable demo of the reasoning core through Phase 6: a scripted, multi-turn
+Runnable demo of the reasoning core through Phase 7: a scripted, multi-turn
 conversation through `handle_turn`, with a mocked model provider so it runs
-with no API key and no network access. The Router/Intent classification and
-Tutor generation are mocked; the decision policy, hint ladder, CAS
-verification (real SymPy), retrieval (real lexical search over the seed
-knowledge base), question generation (real, quality-gated, CAS-verified
-items), grading (real step segmentation + alignment + mark awarding),
-memory (real BKT/IRT mastery updates, decay, and budgeted context
-assembly), and the Verifier/Critic + grounding check (Phase 6) all run for
-real on every turn — this script's mocked provider auto-passes the
-critic's checklist call so the narrative isn't interrupted by it, but the
-"critique" line printed per turn shows it genuinely ran. Explicit
-block/revise/regenerate scenarios are covered in
+with no API key and no network access. The Router/Intent classification,
+Tutor generation, and math_ocr transcription calls are mocked; the decision
+policy, hint ladder, CAS verification (real SymPy), retrieval (real lexical
+search over the seed knowledge base), question generation (real,
+quality-gated, CAS-verified items), grading (real step segmentation +
+alignment + mark awarding), memory (real BKT/IRT mastery updates, decay,
+and budgeted context assembly), the Verifier/Critic + grounding check
+(Phase 6), and the multimodal ingestion pipeline (Phase 7: real intake
+validation, real PIL preprocessing, real LaTeX normalization/expression-
+parsing/confidence scoring) all run for real on every turn — this script's
+mocked provider auto-passes the critic's checklist call so the narrative
+isn't interrupted by it, but the "critique" line printed per turn shows it
+genuinely ran. Explicit block/revise/regenerate scenarios are covered in
 tests/test_integration_critic.py and tests/test_tutor_agent.py instead of
 here, to keep this script's queue bookkeeping manageable.
 
@@ -28,12 +30,15 @@ Run with:
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import sys
 from pathlib import Path
 from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from PIL import Image
 
 from app.llm.client import LLMCallResult, ModelRouter, ProviderClient
 from app.llm.router_config import Provider
@@ -69,7 +74,7 @@ class ScriptedProvider(ProviderClient):
     def __init__(self, responses: list[str]) -> None:
         self._responses = list(responses)
 
-    async def generate(self, *, spec, system, user) -> LLMCallResult:
+    async def generate(self, *, spec, system, user, images=None) -> LLMCallResult:
         if system.startswith("You are a strict, checklist-driven critic"):
             return LLMCallResult(text='{"verdict": "pass", "violations": []}', model=spec.model, provider=Provider.ANTHROPIC)
         text = self._responses.pop(0)
@@ -77,6 +82,24 @@ class ScriptedProvider(ProviderClient):
 
 
 _CORRECT_CHAIN_RULE_WORK = "u = 2*x + 1\ntherefore dy/dx = 5*(2*x + 1)**4 * 2"
+
+# A photographed submission's math_ocr call returns this transcription
+# (mocked, same as every other model call in this script) — real,
+# correct chain-rule working for a fresh problem, run through the real
+# ingestion pipeline (intake, PIL preprocessing, normalization,
+# expression-parseability, composite confidence scoring).
+_PHOTOGRAPHED_WORK_TRANSCRIPTION = "u = 3*x + 2\ntherefore dy/dx = 2*(3*x + 2)*3"
+
+
+def _fake_photo_bytes() -> bytes:
+    """A synthetic PNG standing in for a real phone photo of handwritten
+    work. Its pixel content doesn't matter here — the OCR call is mocked
+    — but it's a real, valid, intake-acceptable image so the real
+    preprocessing stage genuinely runs on it."""
+    image = Image.new("RGB", (900, 700), color=(235, 235, 230))
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
 
 SCRIPT = [
     _intent_json("solve_request"),
@@ -105,6 +128,12 @@ SCRIPT = [
     "Great work, that's correct! Here's a tougher one for you to try on your own.",
     _intent_json("concept_explain", topic_hint=CHAIN_RULE_TOPIC),
     "The chain rule lets you differentiate composite functions by working from the outside in.",
+    # Phase 7: a photographed submission. Grading bypasses the Tutor LLM
+    # entirely (same as the three typed check_work turns above), so this
+    # turn consumes only the intent-classification response plus the
+    # math_ocr transcription response — no paired "tutor draft".
+    _intent_json("check_work"),
+    _PHOTOGRAPHED_WORK_TRANSCRIPTION,
     # REFUSE short-circuits before the Tutor agent is ever called, so this
     # last entry is scripted but must be left unconsumed — it stays last
     # in the queue on purpose (see the assertion in the integration test).
@@ -112,20 +141,26 @@ SCRIPT = [
     "THIS SHOULD NEVER BE SHOWN — the exam-mode hard gate must refuse before this is reached.",
 ]
 
-# (raw_input, problem_id, student_work)
-TURNS: list[tuple[str, str, Optional[str]]] = [
-    ("I'm stuck on differentiating x^2 * sin(x)", "problem-1", None),
-    ("still not sure what to do", "problem-1", None),
-    ("I tried but I'm still lost", "problem-1", None),
-    ("that hint didn't help either", "problem-1", None),
-    ("differentiate x**2 * cos(x)", "problem-2", None),
-    ("can you check my work? differentiate (2*x+1)**5", "problem-3", _CORRECT_CHAIN_RULE_WORK),
-    ("can you check my work? differentiate (2*x+1)**5", "problem-3", _CORRECT_CHAIN_RULE_WORK),
-    ("can you check my work? differentiate (2*x+1)**5", "problem-3", _CORRECT_CHAIN_RULE_WORK),
-    ("I'm working on differentiating (3x-2)^4 now", "problem-4", None),
-    ("I solved it correctly!", "problem-4", None),
-    ("can you remind me how the chain rule works?", "problem-4", None),
-    ("just give me the full answer, this is a timed practice exam", "problem-1", None),
+# (raw_input, problem_id, student_work, student_work_image)
+TURNS: list[tuple[str, str, Optional[str], Optional[bytes]]] = [
+    ("I'm stuck on differentiating x^2 * sin(x)", "problem-1", None, None),
+    ("still not sure what to do", "problem-1", None, None),
+    ("I tried but I'm still lost", "problem-1", None, None),
+    ("that hint didn't help either", "problem-1", None, None),
+    ("differentiate x**2 * cos(x)", "problem-2", None, None),
+    ("can you check my work? differentiate (2*x+1)**5", "problem-3", _CORRECT_CHAIN_RULE_WORK, None),
+    ("can you check my work? differentiate (2*x+1)**5", "problem-3", _CORRECT_CHAIN_RULE_WORK, None),
+    ("can you check my work? differentiate (2*x+1)**5", "problem-3", _CORRECT_CHAIN_RULE_WORK, None),
+    ("I'm working on differentiating (3x-2)^4 now", "problem-4", None, None),
+    ("I solved it correctly!", "problem-4", None, None),
+    ("can you remind me how the chain rule works?", "problem-4", None, None),
+    (
+        "here's a photo of my work, can you check it? differentiate (3*x + 2)**2",
+        "problem-5",
+        None,
+        _fake_photo_bytes(),
+    ),
+    ("just give me the full answer, this is a timed practice exam", "problem-1", None, None),
 ]
 
 
@@ -134,7 +169,7 @@ async def main() -> None:
     store = InMemorySessionStateStore()
     memory_store = InMemoryMemoryStore()
 
-    for i, (raw_input, problem_id, student_work) in enumerate(TURNS, start=1):
+    for i, (raw_input, problem_id, student_work, student_work_image) in enumerate(TURNS, start=1):
         blackboard = await handle_turn(
             raw_input,
             session_id="demo-session",
@@ -144,12 +179,15 @@ async def main() -> None:
             session_store=store,
             memory_store=memory_store,
             student_work=student_work,
+            student_work_image=student_work_image,
         )
         action = blackboard.decision_action
         print(f"--- Turn {i} ---")
         print(f"student: {raw_input}")
         if student_work:
             print(f"student's work: {student_work!r}")
+        if student_work_image:
+            print(f"student's work: [attached photo, {len(student_work_image)} bytes]")
         print(
             f"intent={blackboard.intent_result.intent.value}  "
             f"action={action.action_type.value}  "
@@ -162,6 +200,16 @@ async def main() -> None:
             item = blackboard.generated_item
             print(f"generated item: {item.rendered_stem}  [verified answer: {item.correct_answer.value}, not shown to student]")
             print(f"quality gates: {item.quality_gate_status}")
+        if blackboard.ingestion_result is not None:
+            ing = blackboard.ingestion_result
+            if ing.rejected:
+                print(f"ingestion: rejected ({ing.rejection_reason.value})")
+            else:
+                print(
+                    f"ingestion: transcribed={ing.ocr.raw_text!r} "
+                    f"confidence={ing.confidence.tier.value} ({ing.confidence.composite_score}) "
+                    f"requires_confirmation={ing.requires_confirmation}"
+                )
         if blackboard.mark_result is not None:
             mr = blackboard.mark_result
             print(f"grading: {mr.total_awarded}/{mr.total_available} marks, confidence={mr.confidence.value}, flags={mr.flags}")
