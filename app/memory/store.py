@@ -22,6 +22,9 @@ class MemoryStore(abc.ABC):
     async def save_mastery(self, mastery: SubtopicMastery) -> None: ...
 
     @abc.abstractmethod
+    async def get_all_mastery(self, student_id: str) -> list[SubtopicMastery]: ...
+
+    @abc.abstractmethod
     async def get_misconceptions(self, student_id: str) -> list[MisconceptionRegistryEntry]: ...
 
     @abc.abstractmethod
@@ -38,6 +41,14 @@ class InMemoryMemoryStore(MemoryStore):
 
     async def save_mastery(self, mastery: SubtopicMastery) -> None:
         self._mastery[(mastery.student_id, mastery.subtopic_id)] = mastery
+
+    async def get_all_mastery(self, student_id: str) -> list[SubtopicMastery]:
+        """Phase 18's consolidation batch job (app/memory/consolidation.py)
+        needs to enumerate every subtopic a student has a record for,
+        not just look one up by name — a real production store backs
+        this with "select * where student_id = X", same as
+        get_misconceptions already does."""
+        return [m for (sid, _), m in self._mastery.items() if sid == student_id]
 
     async def get_misconceptions(self, student_id: str) -> list[MisconceptionRegistryEntry]:
         return [entry for (sid, _), entry in self._misconceptions.items() if sid == student_id]
