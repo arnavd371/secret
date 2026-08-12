@@ -17,7 +17,13 @@ so a general vision-capable model is the documented, acceptable fallback).
 Phase 8 adds a fifth, "misconception_diagnose", for the Misconception
 Diagnostician's model-inference fallback (spec §8) — same fast/cheap
 tier as critic_check, since it's a classify-against-a-fixed-catalog call,
-not open-ended generation.
+not open-ended generation. Phase 13 adds a sixth, "item_variant_author",
+for LLM-authored question variants (spec §9.6) — full generation tier
+like tutor_generate, since authoring a genuinely new problem is an
+open-ended creative task, not a classification one; every claim it makes
+is independently CAS-verified before ever being served (app/questions/
+llm_variant.py), so this capability's own output is never trusted on its
+own.
 """
 
 from __future__ import annotations
@@ -76,6 +82,13 @@ CAPABILITY_MODEL_MAP: dict[str, ModelSpec] = {
         max_tokens=256,
         temperature=0.0,
         timeout_seconds=4.0,
+    ),
+    "item_variant_author": ModelSpec(
+        provider=Provider.ANTHROPIC,
+        model="claude-sonnet-5",
+        max_tokens=512,
+        temperature=0.6,
+        timeout_seconds=8.0,
     ),
 }
 

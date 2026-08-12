@@ -75,7 +75,12 @@ class Distractor(BaseModel):
 
 class DifficultyEstimate(BaseModel):
     b_param: float
-    source: Literal["template_prior"] = "template_prior"
+    # "llm_estimated" (Phase 13): a neutral default, not a real difficulty
+    # estimate — an LLM-authored item has no template difficulty_band to
+    # draw from, and the LLM's own self-reported difficulty isn't asked
+    # for or trusted (same "don't trust an unverified model claim"
+    # posture as the answer itself, which *is* independently verified).
+    source: Literal["template_prior", "llm_estimated"] = "template_prior"
 
 
 class CorrectAnswer(BaseModel):
@@ -131,7 +136,13 @@ class GeneratedItem(BaseModel):
     difficulty_estimate: DifficultyEstimate
     correct_answer: CorrectAnswer
     distractors: list[Distractor] = Field(default_factory=list)
-    generation_mode: Literal["parametric"] = "parametric"
+    # "llm_variant" (Phase 13, spec §9.6): the LLM proposed the stem and
+    # a claimed answer; nothing about it is trusted until the same CAS
+    # oracle every other phase relies on independently verifies the
+    # claim (see app/questions/llm_variant.py). An item only ever reaches
+    # this model with generation_mode="llm_variant" after that check
+    # passed — there's no "unverified LLM item" state representable here.
+    generation_mode: Literal["parametric", "llm_variant"] = "parametric"
     quality_gate_report: Optional[QualityGateReport] = None
     mark_scheme: Optional[MarkScheme] = None
 

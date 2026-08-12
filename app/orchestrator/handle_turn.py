@@ -119,7 +119,13 @@ from app.models.contracts import ActionType, Blackboard, DecisionSignals, Intent
 from app.multimodal.pipeline import ingest_image
 from app.orchestrator.signals import DEFAULT_MASTERY_ESTIMATE, estimate_frustration, estimate_safety_result
 from app.policy.decision import decide_pedagogical_action
-from app.questions.generator import ItemGenerationError, generate_item_async, select_template_for_topic
+from app.questions.generator import (
+    ItemGenerationError,
+    generate_item_async,
+    select_template_for_topic,
+    topic_has_known_template,
+)
+from app.questions.llm_variant import generate_llm_variant
 from app.questions.mark_scheme import build_mark_scheme
 from app.questions.models import GeneratedItem
 from app.session.state import InMemorySessionStateStore, ProblemSessionState, SessionStateStore, advance_session_state
@@ -151,7 +157,17 @@ async def _ground_explain_turn(
     return cas_result, retrieved_chunks
 
 
-async def _generate_challenge_item(topic_hint: Optional[str]) -> Optional[GeneratedItem]:
+async def _generate_challenge_item(topic_hint: Optional[str], router: Optional[ModelRouter] = None) -> Optional[GeneratedItem]:
+    # Phase 13 (spec §9.6): only tried when there's genuinely no good
+    # parametric template for this topic — not as a redundant, costlier
+    # alternative to a template that already works. Falls through to the
+    # generic default template below if the LLM can't produce a
+    # CAS-verified item either.
+    if router is not None and not topic_has_known_template(topic_hint):
+        llm_item = await generate_llm_variant(topic_hint, router)
+        if llm_item is not None:
+            return llm_item
+
     template_id = select_template_for_topic(topic_hint)
     try:
         return await generate_item_async(template_id)
@@ -503,13 +519,13 @@ async def handle_turn(
         blackboard.cas_result = cas_result
         blackboard.retrieved_chunks = retrieved_chunks
     elif action.action_type == ActionType.CHALLENGE:
-        challenge_item = await _generate_challenge_item(intent_result.topic_hint)
+        challenge_item = await _generate_challenge_item(intent_result.topic_hint, router)
         blackboard.generated_item = challenge_item
     elif action.action_type == ActionType.QUESTION and action.move == "retrieval_practice" and due_subtopic_id is not None:
         # Phase 9: a real spaced-repetition item for the actual due
         # subtopic, reusing Phase 3's CAS-verified generator rather than
         # inventing a separate item source for review practice.
-        challenge_item = await _generate_challenge_item(due_subtopic_id)
+        challenge_item = await _generate_challenge_item(due_subtopic_id, router)
         blackboard.generated_item = challenge_item
 
     response = await tutor_agent.generate(

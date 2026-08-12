@@ -5,8 +5,15 @@ run the quality gates that decide whether to accept the candidate or
 resample — mirroring spec §9.13's table (each gate's failure action is
 "reject/resample", not just an after-the-fact report).
 
+LLM-authored variants + verifier gating (§9.6) live in app/questions/
+llm_variant.py as a separate, real generation mode rather than being
+folded into this module's parametric sampling loop — the orchestrator
+(app.orchestrator.handle_turn) tries it only when topic_has_known_template()
+below is False, i.e. there's no good parametric template for the topic
+at all, rather than as a redundant, costlier alternative to a template
+that already works.
+
 Not implemented (later-phase non-goals):
-  - LLM-authored variants + verifier gating (§9.6)
   - Online IRT parameter recalibration from response history (§9.7)
   - Mixed-topic/paper-style composition via constrained optimization (§9.10)
   - Adaptive targeting of weak skills/misconceptions (§9.11) — needs the
@@ -63,6 +70,19 @@ def select_template_for_topic(topic_hint: Optional[str]) -> str:
             if topic_hint == subtopic_id or topic_hint in subtopic_id or subtopic_id in topic_hint:
                 return template_id
     return DEFAULT_CHALLENGE_TEMPLATE_ID
+
+
+def topic_has_known_template(topic_hint: Optional[str]) -> bool:
+    """False for a topic_hint that would fall through to the generic
+    default template (Phase 13's real trigger for trying an LLM-authored
+    variant instead — spec §9.6 — rather than silently serving an item
+    on the wrong subtopic)."""
+    if not topic_hint:
+        return False
+    return any(
+        topic_hint == subtopic_id or topic_hint in subtopic_id or subtopic_id in topic_hint
+        for subtopic_id in _TEMPLATE_BY_SUBTOPIC
+    )
 
 # Spec §9.12: "cosine_similarity > 0.85 triggers rejection or forced
 # resample." Implemented here as Jaccard token overlap over rendered
