@@ -117,7 +117,18 @@ _SUPPORTIVE_SCAFFOLD_FALLBACK = (
 )
 
 
-def get_fallback_response(action: Action, *, challenge_item: Optional[GeneratedItem] = None) -> TutorResponse:
+def get_fallback_response(
+    action: Action, *, challenge_item: Optional[GeneratedItem] = None, reason: Optional[str] = None
+) -> TutorResponse:
+    """`reason` (Phase 21, spec's guardrail metrics: leak-check trigger
+    rate needs to distinguish *why* a turn fell back, not just that it
+    did) is a short machine-readable tag the caller supplies - e.g.
+    "leak_check", "critic_block", "grounding_failed",
+    "model_call_failed", "regeneration_failed" - carried straight into
+    ui_metadata for app.guardrail_metrics.extraction to read. None for
+    an unspecified/legacy caller; the fallback still works exactly as
+    before either way, since `templated=True` alone remains the real
+    signal for a plain fallback-rate count."""
     if action.action_type == ActionType.REFUSE:
         return build_refusal_response(action)
 
@@ -144,7 +155,12 @@ def get_fallback_response(action: Action, *, challenge_item: Optional[GeneratedI
     return TutorResponse(
         text=text,
         citations=[],
-        ui_metadata={"action_type": action.action_type.value, "level": action.level, "templated": True},
+        ui_metadata={
+            "action_type": action.action_type.value,
+            "level": action.level,
+            "templated": True,
+            "fallback_reason": reason,
+        },
     )
 
 

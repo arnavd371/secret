@@ -293,7 +293,7 @@ async def generate(
 
     draft = await _call_tutor_model(system_prompt, raw_input, router)
     if draft is None:
-        return get_fallback_response(action, challenge_item=challenge_item)
+        return get_fallback_response(action, challenge_item=challenge_item, reason="model_call_failed")
 
     if _violates_action_contract(draft, action, challenge_item):
         logger.warning(
@@ -301,7 +301,7 @@ async def generate(
             action.action_type,
             action.level,
         )
-        return get_fallback_response(action, challenge_item=challenge_item)
+        return get_fallback_response(action, challenge_item=challenge_item, reason="leak_check")
 
     cas_gated_response = _apply_cas_gate(draft, action, cas_result)
     if cas_gated_response is not None:
@@ -326,7 +326,8 @@ async def generate(
             grounding_result.grounded,
             critique.violations,
         )
-        return get_fallback_response(action, challenge_item=challenge_item)
+        block_reason = "critic_block" if critique.verdict == CritiqueVerdict.BLOCK else "grounding_failed"
+        return get_fallback_response(action, challenge_item=challenge_item, reason=block_reason)
 
     if critique.verdict == CritiqueVerdict.REVISE:
         regenerated = await _regenerate_with_stricter_constraints(
@@ -340,11 +341,11 @@ async def generate(
             memory_context=memory_context,
         )
         if regenerated is None:
-            return get_fallback_response(action, challenge_item=challenge_item)
+            return get_fallback_response(action, challenge_item=challenge_item, reason="regeneration_failed")
         approved_text = regenerated
         grounding_result = check_grounding(approved_text, groundable_chunks)
         if not grounding_result.grounded:
-            return get_fallback_response(action, challenge_item=challenge_item)
+            return get_fallback_response(action, challenge_item=challenge_item, reason="grounding_failed")
 
     return TutorResponse(
         text=approved_text,

@@ -125,6 +125,8 @@ from app.questions.generator import (
     select_template_for_topic,
     topic_has_known_template,
 )
+from app.guardrail_metrics.extraction import extract_guardrail_signals
+from app.guardrail_metrics.store import GuardrailMetricsStore, get_default_guardrail_metrics_store
 from app.questions.llm_variant import generate_llm_variant
 from app.questions.mark_scheme import build_mark_scheme
 from app.questions.response_log import ItemResponseRecord, ResponseLogStore, get_default_response_log_store
@@ -294,6 +296,7 @@ async def handle_turn(
     ia_disclosure_store: Optional[DisclosureStore] = None,
     response_log_store: Optional[ResponseLogStore] = None,
     review_queue_store: Optional[ReviewQueueStore] = None,
+    guardrail_metrics_store: Optional[GuardrailMetricsStore] = None,
     mastery_estimate: Optional[float] = None,
     student_work: Optional[str] = None,
     student_work_image: Optional[bytes] = None,
@@ -353,6 +356,7 @@ async def handle_turn(
     ia_disclosure_store = ia_disclosure_store or get_default_disclosure_store()
     response_log_store = response_log_store or get_default_response_log_store()
     review_queue_store = review_queue_store or get_default_review_queue_store()
+    guardrail_metrics_store = guardrail_metrics_store or get_default_guardrail_metrics_store()
 
     blackboard = Blackboard(
         turn_id=str(uuid.uuid4()),
@@ -600,6 +604,16 @@ async def handle_turn(
     )
     blackboard.draft_response = response
     blackboard.final_response = response
+
+    # Phase 21 (guardrail metrics recorder): a real per-turn signal
+    # record derived from this exact response's ui_metadata, the same
+    # dict Phase 17's critic_degraded check below already reads from.
+    # Deliberately placed only on this path, not on the REFUSE/
+    # multimodal-confirmation early returns above - those are gated
+    # policy/intake decisions, not a guardrail catching a bad Tutor
+    # draft, so folding them into "fallback rate" would conflate two
+    # different things.
+    await guardrail_metrics_store.add(extract_guardrail_signals(blackboard.turn_id, response.ui_metadata))
 
     if response.ui_metadata.get("critic_degraded"):
         # Phase 17 (spec §10.10): the Verifier/Critic fell back to its
