@@ -41,6 +41,12 @@ class CASOperation(str, Enum):
     SOLVE = "solve"
     SIMPLIFY = "simplify"
     EVALUATE = "evaluate"
+    # Phase 12 additions (spec's IB AA HL syllabus coverage: matrices,
+    # definite integrals, piecewise functions) — real SymPy operations,
+    # not new parsing infrastructure bolted onto the five above.
+    DETERMINANT = "determinant"
+    MATRIX_MULTIPLY = "matrix_multiply"
+    PIECEWISE_EVALUATE = "piecewise_evaluate"
 
 
 class CASResult(BaseModel):

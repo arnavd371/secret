@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import Optional, Union
 
 import sympy
@@ -126,10 +127,40 @@ def differentiate(expression: str, variable: str = "x") -> CASResult:
         return _unverifiable(CASOperation.DIFFERENTIATE, expression, exc)
 
 
-def integrate(expression: str, variable: str = "x") -> CASResult:
+def integrate(
+    expression: str, variable: str = "x", lower: Optional[float] = None, upper: Optional[float] = None
+) -> CASResult:
+    """`lower`/`upper` given together (Phase 12) compute a real definite
+    integral via SymPy's own (var, lower, upper) form — a genuine number
+    (or symbolic closed form), never a "+ C" indefinite result. Either
+    bound alone is treated as no bounds at all (an honest fallback rather
+    than guessing which one was meant)."""
     try:
         x = sympy.Symbol(variable)
         expr = _parse(expression)
+
+        if lower is not None and upper is not None:
+            # Whole-number bounds become sympy.Integer rather than
+            # sympy.Float — a bound of exactly 2.0 should still produce
+            # an exact result like 8/3, not a floating-point 2.6667...
+            # Python's float type can't distinguish "2" from "2.0", so
+            # this is the CAS layer's own job, not extraction's.
+            exact_lower = sympy.Integer(lower) if float(lower).is_integer() else sympy.Float(lower)
+            exact_upper = sympy.Integer(upper) if float(upper).is_integer() else sympy.Float(upper)
+            integral = sympy.simplify(sympy.integrate(expr, (x, exact_lower, exact_upper)))
+            if integral.has(sympy.zoo) or integral.has(sympy.nan) or integral.has(sympy.Integral):
+                raise ValueError("definite integral not expressible in closed form")
+            result_exact = str(integral)
+            decimal_value = float(integral.evalf()) if integral.is_number else None
+            return CASResult(
+                status=CASStatus.OK,
+                operation=CASOperation.INTEGRATE,
+                input_latex=sympy.latex(expr),
+                result_exact=result_exact,
+                result_decimal_at=decimal_value,
+                steps=[f"\N{INTEGRAL} from {lower} to {upper} of {expr} d{variable} = {result_exact}"],
+            )
+
         integral = sympy.simplify(sympy.integrate(expr, x))
         if integral.has(sympy.zoo) or integral.has(sympy.nan) or integral.has(sympy.Integral):
             raise ValueError("integral not expressible in elementary closed form")
@@ -207,12 +238,158 @@ def evaluate(expression: str, variable: str = "x", at: Optional[float] = None) -
         return _unverifiable(CASOperation.EVALUATE, expression, exc)
 
 
+_MATRIX_ROW_PATTERN = re.compile(r"\[([^\[\]]*)\]")
+
+
+def _parse_matrix(text: str) -> sympy.Matrix:
+    """"[[1,2],[3,4]]" -> sympy.Matrix([[1,2],[3,4]]). Each entry is
+    parsed individually via `_parse` (the same restricted expression
+    parser every other CAS function uses) — never a raw `eval` of the
+    whole string, so a matrix entry can be a real expression ("2*x") but
+    the parse itself stays exactly as safe as any other CAS input."""
+    stripped = text.strip()
+    if not (stripped.startswith("[[") and stripped.endswith("]]")):
+        raise ValueError(f"not a matrix literal (expected \"[[...],[...]]\"): {text!r}")
+    inner = stripped[1:-1]
+    rows = _MATRIX_ROW_PATTERN.findall(inner)
+    if not rows:
+        raise ValueError(f"no matrix rows found in {text!r}")
+    matrix_rows = [[_parse(entry.strip()) for entry in row.split(",") if entry.strip()] for row in rows]
+    row_lengths = {len(row) for row in matrix_rows}
+    if len(row_lengths) != 1:
+        raise ValueError(f"matrix rows have inconsistent lengths: {row_lengths}")
+    return sympy.Matrix(matrix_rows)
+
+
+def determinant(matrix_text: str) -> CASResult:
+    try:
+        m = _parse_matrix(matrix_text)
+        if m.rows != m.cols:
+            raise ValueError(f"determinant requires a square matrix, got {m.rows}x{m.cols}")
+        det = sympy.simplify(m.det())
+        decimal_value = float(det.evalf()) if det.is_number else None
+        return CASResult(
+            status=CASStatus.OK,
+            operation=CASOperation.DETERMINANT,
+            input_latex=sympy.latex(m),
+            result_exact=str(det),
+            result_decimal_at=decimal_value,
+            steps=[f"det({m.tolist()}) = {det}"],
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _unverifiable(CASOperation.DETERMINANT, matrix_text, exc)
+
+
+def matrix_multiply(combined_text: str) -> CASResult:
+    """`combined_text`: "MATRIX_A * MATRIX_B", e.g.
+    "[[1,2],[3,4]] * [[5,6],[7,8]]" — kept as one string (rather than two
+    parameters) so this fits the same single-expression dispatch shape
+    every other CAS operation uses."""
+    try:
+        if " * " not in combined_text:
+            raise ValueError('expected "MATRIX_A * MATRIX_B", e.g. "[[1,2],[3,4]] * [[5,6],[7,8]]"')
+        a_text, b_text = combined_text.split(" * ", 1)
+        a = _parse_matrix(a_text.strip())
+        b = _parse_matrix(b_text.strip())
+        if a.cols != b.rows:
+            raise ValueError(f"cannot multiply a {a.rows}x{a.cols} matrix by a {b.rows}x{b.cols} matrix")
+        product = sympy.simplify(a * b)
+        return CASResult(
+            status=CASStatus.OK,
+            operation=CASOperation.MATRIX_MULTIPLY,
+            input_latex=f"{sympy.latex(a)} \\times {sympy.latex(b)}",
+            result_exact=str(product.tolist()),
+            steps=[f"{a.tolist()} × {b.tolist()} = {product.tolist()}"],
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _unverifiable(CASOperation.MATRIX_MULTIPLY, combined_text, exc)
+
+
+def _parse_condition(cond_text: str):
+    """`<`, `<=`, `>`, `>=` parse correctly through the normal `_parse`
+    (SymPy overloads them to build real Relational objects). `==`/`!=`
+    do not — see evaluate_piecewise's docstring — so they're built
+    explicitly via sympy.Eq/sympy.Ne instead."""
+    if "!=" in cond_text:
+        lhs, rhs = cond_text.split("!=", 1)
+        return sympy.Ne(_parse(lhs.strip()), _parse(rhs.strip()))
+    if "==" in cond_text:
+        lhs, rhs = cond_text.split("==", 1)
+        return sympy.Eq(_parse(lhs.strip()), _parse(rhs.strip()))
+    return _parse(cond_text)
+
+
+def evaluate_piecewise(pieces_text: str, variable: str, at: float) -> CASResult:
+    """`pieces_text`: semicolon-separated "expr if cond" segments, e.g.
+    "x**2 if x < 0; 2*x if x >= 0" — a final segment with no " if " acts
+    as the default/otherwise branch. Conditions are parsed with the same
+    `_parse` used everywhere else for `<`, `<=`, `>`, `>=`: applied to a
+    SymPy symbol, Python's ordering operators already produce real SymPy
+    Relational objects. `==`/`!=` are the one exception and are handled
+    explicitly below — SymPy overloads Python's `==`/`!=` for structural
+    equality checks (used to compare two expressions), not to build a
+    symbolic Eq/Ne relational, so parsing "x != 0" through `_parse`
+    silently produces the Python bool `True` instead of `Ne(x, 0)`. A
+    real, easy-to-miss SymPy gotcha, not a hypothetical one — caught by
+    this module's own tests.
+
+    This is a structured-input API, not one with its own free-text
+    chat-message extractor in app.cas.extraction — a natural-sounding
+    request for a specific piecewise definition is hard to phrase as a
+    single regexable sentence, so this is exposed for direct/programmatic
+    use (and is exactly as real and CAS-verifiable as every other
+    operation here) rather than forcing a brittle NL trigger onto it.
+    """
+    try:
+        x = sympy.Symbol(variable)
+        segments = [seg.strip() for seg in pieces_text.split(";") if seg.strip()]
+        if not segments:
+            raise ValueError("no piecewise segments given")
+
+        piece_tuples = []
+        for segment in segments:
+            if " if " in segment:
+                expr_part, cond_part = segment.split(" if ", 1)
+                condition = _parse_condition(cond_part.strip())
+            else:
+                expr_part = segment
+                condition = True
+            piece_tuples.append((_parse(expr_part.strip()), condition))
+
+        piecewise_expr = sympy.Piecewise(*piece_tuples)
+        value = piecewise_expr.subs(x, at)
+        if value.has(sympy.Piecewise) or value.has(sympy.nan) or not value.is_number:
+            raise ValueError(f"no piecewise branch's condition matched {variable}={at}")
+        decimal_value = float(value.evalf())
+        return CASResult(
+            status=CASStatus.OK,
+            operation=CASOperation.PIECEWISE_EVALUATE,
+            input_latex=sympy.latex(piecewise_expr),
+            result_exact=str(sympy.nsimplify(value)),
+            result_decimal_at=decimal_value,
+            steps=[f"evaluate piecewise function at {variable}={at}: {value}"],
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _unverifiable(CASOperation.PIECEWISE_EVALUATE, pieces_text, exc)
+
+
 _DISPATCH = {
-    CASOperation.DIFFERENTIATE: lambda expression, variable, at: differentiate(expression, variable),
-    CASOperation.INTEGRATE: lambda expression, variable, at: integrate(expression, variable),
-    CASOperation.SOLVE: lambda expression, variable, at: solve_equation(expression, variable),
-    CASOperation.SIMPLIFY: lambda expression, variable, at: simplify_expr(expression),
-    CASOperation.EVALUATE: lambda expression, variable, at: evaluate(expression, variable, at),
+    CASOperation.DIFFERENTIATE: lambda expression, variable, at, upper_at: differentiate(expression, variable),
+    CASOperation.INTEGRATE: lambda expression, variable, at, upper_at: integrate(
+        expression, variable, lower=at, upper=upper_at
+    ),
+    CASOperation.SOLVE: lambda expression, variable, at, upper_at: solve_equation(expression, variable),
+    CASOperation.SIMPLIFY: lambda expression, variable, at, upper_at: simplify_expr(expression),
+    CASOperation.EVALUATE: lambda expression, variable, at, upper_at: evaluate(expression, variable, at),
+    CASOperation.DETERMINANT: lambda expression, variable, at, upper_at: determinant(expression),
+    CASOperation.MATRIX_MULTIPLY: lambda expression, variable, at, upper_at: matrix_multiply(expression),
+    CASOperation.PIECEWISE_EVALUATE: lambda expression, variable, at, upper_at: (
+        evaluate_piecewise(expression, variable, at)
+        if at is not None
+        else _unverifiable(
+            CASOperation.PIECEWISE_EVALUATE, expression, ValueError("piecewise_evaluate needs an 'at' value")
+        )
+    ),
 }
 
 
@@ -226,8 +403,17 @@ def _coerce_operation(operation: Union[CASOperation, str]) -> Optional[CASOperat
 
 
 def run_cas_operation(
-    operation: Union[CASOperation, str], expression: str, variable: str = "x", at: Optional[float] = None
+    operation: Union[CASOperation, str],
+    expression: str,
+    variable: str = "x",
+    at: Optional[float] = None,
+    upper_at: Optional[float] = None,
 ) -> CASResult:
+    """`upper_at` (Phase 12) is only meaningful for INTEGRATE — given
+    together with `at` (as the lower bound), it makes this a real
+    definite integral instead of an indefinite one. Every other
+    operation ignores it; a single shared dispatch signature is simpler
+    than a special-cased call path just for one operation."""
     op = _coerce_operation(operation)
     if op is None:
         # Fabricate a placeholder CASResult purely to carry the
@@ -242,7 +428,7 @@ def run_cas_operation(
     handler = _DISPATCH.get(op)
     if handler is None:  # pragma: no cover - exhaustive over CASOperation
         return _unverifiable(op, expression, ValueError(f"unsupported CAS operation: {op}"))
-    return handler(expression, variable, at)
+    return handler(expression, variable, at, upper_at)
 
 
 async def run_cas_operation_async(
@@ -251,6 +437,7 @@ async def run_cas_operation_async(
     variable: str = "x",
     at: Optional[float] = None,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+    upper_at: Optional[float] = None,
 ) -> CASResult:
     """Async wrapper: SymPy calls are synchronous/CPU-bound, so they run in
     the default executor and are bounded by a real timeout — a slow
@@ -259,7 +446,7 @@ async def run_cas_operation_async(
     loop = asyncio.get_running_loop()
     try:
         return await asyncio.wait_for(
-            loop.run_in_executor(None, run_cas_operation, operation, expression, variable, at),
+            loop.run_in_executor(None, run_cas_operation, operation, expression, variable, at, upper_at),
             timeout=timeout_seconds,
         )
     except asyncio.TimeoutError:

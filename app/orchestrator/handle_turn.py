@@ -144,7 +144,7 @@ async def _ground_explain_turn(
     math_task = extract_math_task(raw_input)
     if math_task is not None:
         cas_result = await run_cas_operation_async(
-            math_task.operation, math_task.expression, math_task.variable, math_task.at
+            math_task.operation, math_task.expression, math_task.variable, math_task.at, upper_at=math_task.upper_at
         )
 
     retrieved_chunks = knowledge_base.retrieve(raw_input, topic_hint=topic_hint)
@@ -175,7 +175,7 @@ async def _grade_check_work_turn(
         return None
 
     cas_result = await run_cas_operation_async(
-        math_task.operation, math_task.expression, math_task.variable, math_task.at
+        math_task.operation, math_task.expression, math_task.variable, math_task.at, upper_at=math_task.upper_at
     )
     if cas_result.status != CASStatus.OK:
         return None

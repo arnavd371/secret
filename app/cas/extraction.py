@@ -25,6 +25,10 @@ class MathTask(BaseModel):
     expression: str
     variable: str = "x"
     at: Optional[float] = None
+    # Phase 12: paired with `at` (as the lower bound) for a real definite
+    # integral. None for every other operation, including an indefinite
+    # integral extracted without "from A to B".
+    upper_at: Optional[float] = None
 
 
 _FILLER_SUFFIX = re.compile(r"\s*\b(for me|for you|please)\b[\s.,:;!?]*$", re.IGNORECASE)
@@ -58,6 +62,29 @@ def _extract_differentiate(text: str) -> Optional[MathTask]:
     return MathTask(operation=CASOperation.DIFFERENTIATE, expression=_clean(match.group(1)))
 
 
+def _extract_definite_integral(text: str) -> Optional[MathTask]:
+    """"integrate X from A to B [with respect to VAR]" - checked before
+    the general indefinite-integral extractor below, since it's the more
+    specific pattern (both share the "integrate" keyword)."""
+    match = re.search(
+        r"(?:integrate|integral of|find (?:the )?integral of)\s+(.+?)\s+from\s+(-?\d+(?:\.\d+)?)\s+to\s+(-?\d+(?:\.\d+)?)",
+        text,
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+    expr_part, lower_str, upper_str = match.groups()
+    variable_match = re.search(r"\bwith\s+respect\s+to\s+([a-zA-Z])\b", text, re.IGNORECASE)
+    variable = variable_match.group(1) if variable_match else "x"
+    return MathTask(
+        operation=CASOperation.INTEGRATE,
+        expression=_clean(expr_part),
+        variable=variable,
+        at=float(lower_str),
+        upper_at=float(upper_str),
+    )
+
+
 def _extract_integrate(text: str) -> Optional[MathTask]:
     match = re.search(
         r"(?:integrate|integral of|antiderivative of|find (?:the )?integral of)\s+(.+)", text, re.IGNORECASE
@@ -69,6 +96,13 @@ def _extract_integrate(text: str) -> Optional[MathTask]:
     variable = variable_match.group(1) if variable_match else "x"
     expr_part = re.sub(r"\bwith\s+respect\s+to\s+[a-zA-Z]\b.*", "", tail, flags=re.IGNORECASE)
     return MathTask(operation=CASOperation.INTEGRATE, expression=_clean(expr_part), variable=variable)
+
+
+def _extract_determinant(text: str) -> Optional[MathTask]:
+    match = re.search(r"determinant\s+of\s+(\[\[.+\]\])", text, re.IGNORECASE)
+    if not match:
+        return None
+    return MathTask(operation=CASOperation.DETERMINANT, expression=match.group(1).strip())
 
 
 def _extract_evaluate(text: str) -> Optional[MathTask]:
@@ -92,12 +126,14 @@ def _extract_simplify(text: str) -> Optional[MathTask]:
     return MathTask(operation=CASOperation.SIMPLIFY, expression=_clean(match.group(1)))
 
 
-# Order matters: "solve" and "evaluate ... at x=" are more specific
-# patterns and are checked before the more general differentiate/
-# integrate/simplify keywords.
+# Order matters: "solve", "evaluate ... at x=", "determinant of", and the
+# definite-integral form are all more specific patterns, checked before
+# the more general differentiate/integrate/simplify keywords.
 _EXTRACTORS = (
     _extract_solve,
     _extract_evaluate,
+    _extract_determinant,
+    _extract_definite_integral,
     _extract_differentiate,
     _extract_integrate,
     _extract_simplify,
