@@ -1,0 +1,148 @@
+{
+  "results": [
+    {
+      "category": "cas",
+      "detail": "",
+      "name": "power_rule_derivative",
+      "passed": true
+    },
+    {
+      "category": "cas",
+      "detail": "",
+      "name": "product_rule_derivative",
+      "passed": true
+    },
+    {
+      "category": "cas",
+      "detail": "",
+      "name": "indefinite_integral_power",
+      "passed": true
+    },
+    {
+      "category": "cas",
+      "detail": "",
+      "name": "definite_integral_exact_fraction",
+      "passed": true
+    },
+    {
+      "category": "cas",
+      "detail": "",
+      "name": "quadratic_solve_two_roots",
+      "passed": true
+    },
+    {
+      "category": "cas",
+      "detail": "",
+      "name": "simplify_trig_identity",
+      "passed": true
+    },
+    {
+      "category": "cas",
+      "detail": "",
+      "name": "evaluate_at_point",
+      "passed": true
+    },
+    {
+      "category": "cas",
+      "detail": "",
+      "name": "two_by_two_determinant",
+      "passed": true
+    },
+    {
+      "category": "cas",
+      "detail": "",
+      "name": "two_by_two_matrix_multiply",
+      "passed": true
+    },
+    {
+      "category": "cas",
+      "detail": "",
+      "name": "piecewise_below_boundary",
+      "passed": true
+    },
+    {
+      "category": "cas",
+      "detail": "",
+      "name": "piecewise_at_boundary",
+      "passed": true
+    },
+    {
+      "category": "decision_policy",
+      "detail": "",
+      "name": "high_integrity_risk_always_refuses",
+      "passed": true
+    },
+    {
+      "category": "decision_policy",
+      "detail": "",
+      "name": "integrity_gate_wins_over_challenge_shortcut",
+      "passed": true
+    },
+    {
+      "category": "decision_policy",
+      "detail": "",
+      "name": "high_mastery_first_attempt_triggers_challenge",
+      "passed": true
+    },
+    {
+      "category": "decision_policy",
+      "detail": "",
+      "name": "graded_take_home_elevated_risk_refuses",
+      "passed": true
+    },
+    {
+      "category": "decision_policy",
+      "detail": "",
+      "name": "first_attempt_solve_request_gets_diagnostic_question",
+      "passed": true
+    },
+    {
+      "category": "decision_policy",
+      "detail": "",
+      "name": "mid_attempt_solve_request_gets_hint",
+      "passed": true
+    },
+    {
+      "category": "decision_policy",
+      "detail": "",
+      "name": "check_work_intent_explains_with_error_localization",
+      "passed": true
+    },
+    {
+      "category": "decision_policy",
+      "detail": "",
+      "name": "high_frustration_overrides_to_supportive_scaffold",
+      "passed": true
+    },
+    {
+      "category": "grading",
+      "detail": "",
+      "name": "chain_rule_fully_correct_and_supported",
+      "passed": true
+    },
+    {
+      "category": "grading",
+      "detail": "",
+      "name": "chain_rule_unsupported_correct_answer",
+      "passed": true
+    },
+    {
+      "category": "grading",
+      "detail": "",
+      "name": "chain_rule_wrong_final_answer",
+      "passed": true
+    },
+    {
+      "category": "grading",
+      "detail": "",
+      "name": "chain_rule_no_working_no_answer",
+      "passed": true
+    },
+    {
+      "category": "grading",
+      "detail": "",
+      "name": "quadratic_solve_both_roots_given",
+      "passed": true
+    }
+  ]
+}

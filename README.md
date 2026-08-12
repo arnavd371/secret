@@ -139,7 +139,14 @@ Phase 19, GDPR export/erasure, is real across every store in this codebase that 
 - Session state is excluded from both, also for a real, documented reason rather than an oversight: `ProblemSessionState` is keyed by session_id alone and never stores student_id, so there's no query path from "this student" to "these sessions" without inventing a lookup table that doesn't exist.
 - Adding real deletion required adding it as a genuinely new capability to six store classes (none of them supported delete at all before this phase) plus new by-student query methods to three that only supported narrower lookups - a real, if unglamorous, expansion of every store's own interface, not just a wrapper function on top of what already existed.
 
-Not built yet: real curriculum/template content beyond the seed set, the full spec §8.2 misconception catalog (this build covers four named errors with real detection behind them, not the whole syllabus), per-node solution-graph diagnosis for errors that aren't a clean pattern match, the published FSRS algorithm's per-user ML-fitted weights (fixed illustrative parameters are used instead, see Phase 9 above), per-IB-assessment-criterion rubric feedback for IA/EE coaching (the coaching is real and bounded, but doesn't score against the actual IB criteria A-E), a full turn-wide Planner-produced stage graph (Phase 11's executor is real and general-purpose, but it's applied to the one place in the current turn with genuine independent side effects, not to every stage - most of a turn really is sequential, and forcing a parallel graph onto genuinely dependent stages would be simulated parallelism, not real), multi-page PDF or HEIC image intake (PNG/JPEG only), a specialized math-OCR service (a general vision-capable model is used instead, the documented fallback per spec), dense/vector retrieval, a reranker, grade-boundary calibration from historical exam data, self-consistency multi-sampling (the CAS/mark-scheme verification this system already has is a stronger deterministic guarantee for the claims that matter, so this was a considered tradeoff, not an oversight), offline eval harness, online guardrail metrics, regression gating, shadow evaluation. These are stubbed with TODOs pointing at the relevant spec section.
+Phase 20, offline eval harness and regression gating, adds a real, fast, fully offline quality-tracking layer over the three deterministic subsystems (decision policy, CAS solver, grader) that don't need a live model call to evaluate:
+
+- A hand-authored golden dataset (`app/eval/scenarios.py`): 11 CAS scenarios covering every operation including Phase 12's matrix/definite-integral/piecewise additions, 8 decision-policy scenarios covering hard gates through the default fallback, 5 grading scenarios covering full credit through the unsupported-answer flag. Every expected value is checked by real computation at run time (SymPy symbolic equivalence, root-set comparison, matrix equality, or the grader's own mark totals), never by string-matching a previously captured output, so a cosmetically different but mathematically equal result still passes.
+- `run_eval_suite()` runs all of it synchronously in well under a second, no event loop or API key needed, and reports an overall and a per-category pass rate.
+- A stored JSON baseline (`app/eval/baseline.json`) plus `check_regression()`, which compares a fresh run against it per category, not just overall, so a change that fixes ten CAS cases while quietly breaking two grading cases still fails the gate.
+- `scripts/run_eval.py` is a real runnable CI-shaped entrypoint: exits 0 on a passing gate, 1 on a regression, and `--update-baseline` deliberately requires an explicit flag rather than auto-overwriting on every run.
+
+Not built yet: real curriculum/template content beyond the seed set, the full spec §8.2 misconception catalog (this build covers four named errors with real detection behind them, not the whole syllabus), per-node solution-graph diagnosis for errors that aren't a clean pattern match, the published FSRS algorithm's per-user ML-fitted weights (fixed illustrative parameters are used instead, see Phase 9 above), per-IB-assessment-criterion rubric feedback for IA/EE coaching (the coaching is real and bounded, but doesn't score against the actual IB criteria A-E), a full turn-wide Planner-produced stage graph (Phase 11's executor is real and general-purpose, but it's applied to the one place in the current turn with genuine independent side effects, not to every stage - most of a turn really is sequential, and forcing a parallel graph onto genuinely dependent stages would be simulated parallelism, not real), multi-page PDF or HEIC image intake (PNG/JPEG only), a specialized math-OCR service (a general vision-capable model is used instead, the documented fallback per spec), dense/vector retrieval, a reranker, grade-boundary calibration from historical exam data, self-consistency multi-sampling (the CAS/mark-scheme verification this system already has is a stronger deterministic guarantee for the claims that matter, so this was a considered tradeoff, not an oversight), online guardrail metrics, shadow evaluation against live production traffic. These are stubbed with TODOs pointing at the relevant spec section.
 
 ## Structure
 
@@ -161,11 +168,13 @@ app/
   planner/                  real dependency-graph stage executor (asyncio.gather over what's actually ready)
   review_queue/             human-in-the-loop review/appeals queue (pending -> resolved/appealed lifecycle)
   privacy/                  GDPR export/erasure across every student-data store
+  eval/                     offline eval harness, golden scenarios, regression gate, JSON baseline
   llm/                      model router: one config file for all model names, one call() entrypoint
   session/state.py          hint ladder session state
   orchestrator/             wires everything together into handle_turn()
   main.py                   minimal FastAPI gateway
 scripts/run_scripted_conversation.py   runnable demo, no API key needed
+scripts/run_eval.py                    offline eval harness + regression gate, CI-shaped exit code
 tests/                      unit + integration tests
 ```
 
@@ -177,10 +186,16 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Run the tests (479 tests and growing as phases 12+ land, all mocked at the model boundary, no API key or network needed; SymPy, retrieval, item generation, grading, memory math, the grounding check, the multimodal preprocessing/normalization/confidence math, the misconception pattern detectors, the FSRS scheduling math, the IA/EE guard/stage classifier/disclosure formatter, the Planner's dependency-graph executor (including real wall-clock timing assertions proving concurrent, not sequential, execution), and the definite-integral/matrix/piecewise CAS operations all run for real):
+Run the tests (492 tests and growing as phases 20+ land, all mocked at the model boundary, no API key or network needed; SymPy, retrieval, item generation, grading, memory math, the grounding check, the multimodal preprocessing/normalization/confidence math, the misconception pattern detectors, the FSRS scheduling math, the IA/EE guard/stage classifier/disclosure formatter, the Planner's dependency-graph executor (including real wall-clock timing assertions proving concurrent, not sequential, execution), the definite-integral/matrix/piecewise CAS operations, and the eval harness's regression-gate logic all run for real):
 
 ```bash
 pytest -q
+```
+
+Run the offline eval harness against its stored baseline (exits 1 on a real regression, no API key or network needed):
+
+```bash
+python3 scripts/run_eval.py
 ```
 
 Run the scripted demo conversation (shows real mastery climb from three gradings driving a later CHALLENGE decision with no override, a `critique:` line per turn confirming the Verifier/Critic and grounding check ran, an `ingestion:` line for a photographed submission showing the real intake/preprocessing/confidence pipeline running before grading, a `diagnosis:` line for a wrong submission showing the misconception it was pattern-matched to, which then appears in the very next turn's `memory:` line, an exam_prep turn whose `reason=exam_prep_review_due` and generated item come from a real, pre-seeded-overdue FSRS schedule, two ia_ee_help turns (real coaching allowed, then a ghostwriting request refused) with a real disclosure statement rendered from both at the end, and a `plan:` line per graded turn showing the real concurrent post-grading stage execution and its actual measured timing):
