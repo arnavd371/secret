@@ -25,6 +25,12 @@ class ReviewQueueStore(abc.ABC):
     @abc.abstractmethod
     async def list_pending(self, student_id: Optional[str] = None) -> list[ReviewQueueEntry]: ...
 
+    @abc.abstractmethod
+    async def get_all_for_student(self, student_id: str) -> list[ReviewQueueEntry]: ...
+
+    @abc.abstractmethod
+    async def erase_student(self, student_id: str) -> int: ...
+
 
 class InMemoryReviewQueueStore(ReviewQueueStore):
     def __init__(self) -> None:
@@ -44,6 +50,18 @@ class InMemoryReviewQueueStore(ReviewQueueStore):
         if student_id is not None:
             pending = [e for e in pending if e.student_id == student_id]
         return sorted(pending, key=lambda e: e.created_at)
+
+    async def get_all_for_student(self, student_id: str) -> list[ReviewQueueEntry]:
+        """Phase 19 (GDPR export): every entry regardless of status, not
+        just the pending ones list_pending returns."""
+        matching = [e for e in self._entries.values() if e.student_id == student_id]
+        return sorted(matching, key=lambda e: e.created_at)
+
+    async def erase_student(self, student_id: str) -> int:
+        ids = [entry_id for entry_id, e in self._entries.items() if e.student_id == student_id]
+        for entry_id in ids:
+            del self._entries[entry_id]
+        return len(ids)
 
 
 _default_review_queue_store: Optional[ReviewQueueStore] = None

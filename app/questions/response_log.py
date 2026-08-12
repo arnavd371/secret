@@ -35,6 +35,12 @@ class ResponseLogStore(abc.ABC):
     @abc.abstractmethod
     async def get_all(self, template_id: str) -> list[ItemResponseRecord]: ...
 
+    @abc.abstractmethod
+    async def get_all_for_student(self, student_id: str) -> list[ItemResponseRecord]: ...
+
+    @abc.abstractmethod
+    async def erase_student(self, student_id: str) -> int: ...
+
 
 class InMemoryResponseLogStore(ResponseLogStore):
     def __init__(self) -> None:
@@ -45,6 +51,21 @@ class InMemoryResponseLogStore(ResponseLogStore):
 
     async def get_all(self, template_id: str) -> list[ItemResponseRecord]:
         return [r for r in self._records if r.template_id == template_id]
+
+    async def get_all_for_student(self, student_id: str) -> list[ItemResponseRecord]:
+        """Phase 19 (GDPR export): this store is normally queried by
+        template (for recalibration); export needs the orthogonal
+        by-student view instead."""
+        return [r for r in self._records if r.student_id == student_id]
+
+    async def erase_student(self, student_id: str) -> int:
+        """Real deletion. Erasing a student's individual responses does
+        reduce the sample a template's future recalibration draws from
+        (app.questions.irt_recalibration) - an accepted, documented
+        tradeoff of honoring erasure, not an oversight."""
+        before = len(self._records)
+        self._records = [r for r in self._records if r.student_id != student_id]
+        return before - len(self._records)
 
 
 _default_response_log_store: Optional[ResponseLogStore] = None

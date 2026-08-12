@@ -20,6 +20,12 @@ class IAProjectStateStore(abc.ABC):
     @abc.abstractmethod
     async def save(self, state: IAProjectState) -> None: ...
 
+    @abc.abstractmethod
+    async def get_all_for_student(self, student_id: str) -> list[IAProjectState]: ...
+
+    @abc.abstractmethod
+    async def erase_student(self, student_id: str) -> int: ...
+
 
 class InMemoryIAProjectStateStore(IAProjectStateStore):
     def __init__(self) -> None:
@@ -30,6 +36,18 @@ class InMemoryIAProjectStateStore(IAProjectStateStore):
 
     async def save(self, state: IAProjectState) -> None:
         self._states[(state.student_id, state.project_id)] = state
+
+    async def get_all_for_student(self, student_id: str) -> list[IAProjectState]:
+        """Phase 19 (GDPR export): every IA/EE project this student has,
+        not just one looked up by id - needed to enumerate what data
+        exists about them at all."""
+        return [state for (sid, _), state in self._states.items() if sid == student_id]
+
+    async def erase_student(self, student_id: str) -> int:
+        keys = [k for k in self._states if k[0] == student_id]
+        for k in keys:
+            del self._states[k]
+        return len(keys)
 
 
 _default_ia_project_store: Optional[IAProjectStateStore] = None

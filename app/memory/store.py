@@ -30,6 +30,9 @@ class MemoryStore(abc.ABC):
     @abc.abstractmethod
     async def save_misconception(self, entry: MisconceptionRegistryEntry) -> None: ...
 
+    @abc.abstractmethod
+    async def erase_student(self, student_id: str) -> int: ...
+
 
 class InMemoryMemoryStore(MemoryStore):
     def __init__(self) -> None:
@@ -55,6 +58,18 @@ class InMemoryMemoryStore(MemoryStore):
 
     async def save_misconception(self, entry: MisconceptionRegistryEntry) -> None:
         self._misconceptions[(entry.student_id, entry.misconception_id)] = entry
+
+    async def erase_student(self, student_id: str) -> int:
+        """Phase 19 (GDPR erasure): real deletion, not a soft-delete flag
+        - every mastery and misconception record keyed to this student is
+        removed outright. Returns the real count of records erased."""
+        mastery_keys = [k for k in self._mastery if k[0] == student_id]
+        misconception_keys = [k for k in self._misconceptions if k[0] == student_id]
+        for k in mastery_keys:
+            del self._mastery[k]
+        for k in misconception_keys:
+            del self._misconceptions[k]
+        return len(mastery_keys) + len(misconception_keys)
 
 
 _default_memory_store: Optional[MemoryStore] = None

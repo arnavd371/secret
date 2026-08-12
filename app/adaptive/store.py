@@ -23,6 +23,9 @@ class ReviewStateStore(abc.ABC):
     @abc.abstractmethod
     async def get_all_for_student(self, student_id: str) -> list[ReviewState]: ...
 
+    @abc.abstractmethod
+    async def erase_student(self, student_id: str) -> int: ...
+
 
 class InMemoryReviewStateStore(ReviewStateStore):
     def __init__(self) -> None:
@@ -36,6 +39,14 @@ class InMemoryReviewStateStore(ReviewStateStore):
 
     async def get_all_for_student(self, student_id: str) -> list[ReviewState]:
         return [state for (sid, _), state in self._states.items() if sid == student_id]
+
+    async def erase_student(self, student_id: str) -> int:
+        """Phase 19 (GDPR erasure): real deletion of every FSRS review
+        state for this student."""
+        keys = [k for k in self._states if k[0] == student_id]
+        for k in keys:
+            del self._states[k]
+        return len(keys)
 
 
 _default_review_state_store: Optional[ReviewStateStore] = None
