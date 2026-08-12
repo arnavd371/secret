@@ -13,8 +13,13 @@ below is False, i.e. there's no good parametric template for the topic
 at all, rather than as a redundant, costlier alternative to a template
 that already works.
 
+Online IRT parameter recalibration from response history (§9.7) lives in
+app/questions/irt_recalibration.py: generate_item_async() consults it
+(via an optional response_log_store) for a real empirical difficulty
+computed from actual response history, replacing the template's
+hand-set difficulty_band prior once enough real attempts exist.
+
 Not implemented (later-phase non-goals):
-  - Online IRT parameter recalibration from response history (§9.7)
   - Mixed-topic/paper-style composition via constrained optimization (§9.10)
   - Adaptive targeting of weak skills/misconceptions (§9.11) — needs the
     Phase 5 mastery model
@@ -39,6 +44,7 @@ import sympy
 from app.cas.models import CASResult, CASStatus
 from app.cas.solver import run_cas_operation
 from app.questions.distractors import generate_distractors
+from app.questions.irt_recalibration import RecalibrationResult, recalibrate_template_difficulty
 from app.questions.mark_scheme import build_mark_scheme
 from app.questions.models import (
     CorrectAnswer,
@@ -48,6 +54,7 @@ from app.questions.models import (
     QualityGateReport,
     QualityGateResult,
 )
+from app.questions.response_log import ResponseLogStore
 from app.questions.templates import TEMPLATE_BANK
 
 # Maps a Router/Intent agent topic_hint (spec §2.2, same subtopic_id
@@ -274,7 +281,15 @@ def generate_item(
     seed: Optional[int] = None,
     avoid_parameter_hashes: Optional[set[str]] = None,
     avoid_stem_texts: Optional[list[str]] = None,
+    recalibration: Optional[RecalibrationResult] = None,
 ) -> GeneratedItem:
+    """`recalibration` (Phase 14, spec §9.7), when given and it matches
+    this template, replaces the hand-set difficulty_band midpoint with a
+    real value computed from actual response history
+    (app.questions.irt_recalibration) — resolved by the async wrapper
+    below before this sync function runs, same convention as every other
+    "resolve the real signal in the orchestrator, keep the core function
+    itself simple" pattern in this codebase."""
     template = TEMPLATE_BANK.get(template_id)
     if template is None:
         raise ItemGenerationError(f"unknown template_id: {template_id!r}")
@@ -309,6 +324,11 @@ def generate_item(
         item_id = f"ITEM-{uuid.uuid4().hex[:12]}"
         b_min, b_max = template.difficulty_band
 
+        if recalibration is not None and recalibration.template_id == template.template_id:
+            difficulty_estimate = DifficultyEstimate(b_param=recalibration.recalibrated_b, source="recalibrated")
+        else:
+            difficulty_estimate = DifficultyEstimate(b_param=round((b_min + b_max) / 2, 3))
+
         item = GeneratedItem(
             item_id=item_id,
             template_id=template.template_id,
@@ -316,7 +336,7 @@ def generate_item(
             sampled_parameters=params,
             rendered_stem=rendered_stem,
             calculator_mode=template.calculator_mode,
-            difficulty_estimate=DifficultyEstimate(b_param=round((b_min + b_max) / 2, 3)),
+            difficulty_estimate=difficulty_estimate,
             correct_answer=CorrectAnswer(value=cas_result.result_exact or "", cas_verified=True),
             distractors=distractors,
             mark_scheme=build_mark_scheme(item_id, cas_result),
@@ -335,10 +355,21 @@ async def generate_item_async(
     seed: Optional[int] = None,
     avoid_parameter_hashes: Optional[set[str]] = None,
     avoid_stem_texts: Optional[list[str]] = None,
+    response_log_store: Optional[ResponseLogStore] = None,
 ) -> GeneratedItem:
     """Async wrapper: generation is CPU-bound (SymPy) but normally fast
     (a handful of resample attempts at most); run off the event loop
-    thread anyway, consistent with how CAS calls are handled elsewhere."""
+    thread anyway, consistent with how CAS calls are handled elsewhere.
+
+    `response_log_store` (Phase 14, spec §9.7), when given, is consulted
+    for a real recalibrated difficulty before generation runs — the only
+    part of this whole call that's genuinely I/O (a store lookup), which
+    is why it's resolved here rather than inside the sync generate_item."""
+    recalibration = (
+        await recalibrate_template_difficulty(template_id, response_log_store)
+        if response_log_store is not None
+        else None
+    )
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(
         None,
@@ -348,5 +379,6 @@ async def generate_item_async(
             seed=seed,
             avoid_parameter_hashes=avoid_parameter_hashes,
             avoid_stem_texts=avoid_stem_texts,
+            recalibration=recalibration,
         ),
     )

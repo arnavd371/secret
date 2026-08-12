@@ -80,7 +80,11 @@ class DifficultyEstimate(BaseModel):
     # draw from, and the LLM's own self-reported difficulty isn't asked
     # for or trusted (same "don't trust an unverified model claim"
     # posture as the answer itself, which *is* independently verified).
-    source: Literal["template_prior", "llm_estimated"] = "template_prior"
+    # "recalibrated" (Phase 14, spec §9.7): a real empirical difficulty
+    # computed from actual response history via app.questions.
+    # irt_recalibration, replacing the template's hand-set prior once
+    # enough real attempts exist.
+    source: Literal["template_prior", "llm_estimated", "recalibrated"] = "template_prior"
 
 
 class CorrectAnswer(BaseModel):

@@ -4,6 +4,7 @@ item's answer is checked against real SymPy computation, not just "did it
 run" — same standard as the CAS solver tests.
 """
 
+import pytest
 import sympy
 
 from app.cas.solver import verify_claim
@@ -11,11 +12,15 @@ from app.questions.distractors import generate_distractors
 from app.questions.generator import (
     compute_parameter_hash,
     generate_item,
+    generate_item_async,
     is_number_friendly,
     select_template_for_topic,
+    topic_has_known_template,
 )
+from app.questions.irt_recalibration import RecalibrationResult
 from app.questions.mark_scheme import build_mark_scheme
 from app.questions.models import ItemTemplate, ParamSpec
+from app.questions.response_log import InMemoryResponseLogStore, ItemResponseRecord
 from app.questions.templates import TEMPLATE_BANK
 
 
@@ -220,6 +225,64 @@ def test_select_template_falls_back_to_default_for_unknown_topic():
 
     assert select_template_for_topic("some.unrelated.topic") == DEFAULT_CHALLENGE_TEMPLATE_ID
     assert select_template_for_topic(None) == DEFAULT_CHALLENGE_TEMPLATE_ID
+
+
+def test_topic_has_known_template_true_for_a_mapped_topic():
+    assert topic_has_known_template("calculus.differentiation.chain_rule") is True
+
+
+def test_topic_has_known_template_false_for_unmapped_or_missing_topic():
+    assert topic_has_known_template("statistics.normal_distribution") is False
+    assert topic_has_known_template(None) is False
+
+
+# ---------------------------------------------------------------------------
+# Phase 14: IRT recalibration wiring (spec §9.7)
+# ---------------------------------------------------------------------------
+
+
+def test_generate_item_uses_recalibrated_difficulty_when_given():
+    recalibration = RecalibrationResult(
+        template_id="AA.SL.CALC.DIFF.CHAIN.T003", sample_size=20, pass_rate=0.2, recalibrated_b=1.5
+    )
+    item = generate_item("AA.SL.CALC.DIFF.CHAIN.T003", seed=1, recalibration=recalibration)
+    assert item.difficulty_estimate.source == "recalibrated"
+    assert item.difficulty_estimate.b_param == 1.5
+
+
+def test_generate_item_ignores_recalibration_for_a_different_template():
+    recalibration = RecalibrationResult(
+        template_id="SOME.OTHER.TEMPLATE", sample_size=20, pass_rate=0.2, recalibrated_b=1.5
+    )
+    item = generate_item("AA.SL.CALC.DIFF.CHAIN.T003", seed=1, recalibration=recalibration)
+    assert item.difficulty_estimate.source == "template_prior"
+
+
+def test_generate_item_without_recalibration_uses_template_prior():
+    item = generate_item("AA.SL.CALC.DIFF.CHAIN.T003", seed=1)
+    assert item.difficulty_estimate.source == "template_prior"
+
+
+@pytest.mark.asyncio
+async def test_generate_item_async_recalibrates_from_a_real_response_log():
+    store = InMemoryResponseLogStore()
+    for i in range(15):
+        await store.add(
+            ItemResponseRecord(template_id="AA.SL.CALC.DIFF.CHAIN.T003", student_id=f"s{i}", correct=(i < 12))
+        )
+
+    item = await generate_item_async("AA.SL.CALC.DIFF.CHAIN.T003", seed=1, response_log_store=store)
+    assert item.difficulty_estimate.source == "recalibrated"
+    assert item.difficulty_estimate.b_param < 0  # 12/15 correct = easy
+
+
+@pytest.mark.asyncio
+async def test_generate_item_async_falls_back_to_prior_with_insufficient_history():
+    store = InMemoryResponseLogStore()
+    await store.add(ItemResponseRecord(template_id="AA.SL.CALC.DIFF.CHAIN.T003", student_id="s1", correct=True))
+
+    item = await generate_item_async("AA.SL.CALC.DIFF.CHAIN.T003", seed=1, response_log_store=store)
+    assert item.difficulty_estimate.source == "template_prior"
 
 
 # ---------------------------------------------------------------------------

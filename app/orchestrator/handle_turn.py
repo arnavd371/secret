@@ -127,6 +127,7 @@ from app.questions.generator import (
 )
 from app.questions.llm_variant import generate_llm_variant
 from app.questions.mark_scheme import build_mark_scheme
+from app.questions.response_log import ItemResponseRecord, ResponseLogStore, get_default_response_log_store
 from app.questions.models import GeneratedItem
 from app.session.state import InMemorySessionStateStore, ProblemSessionState, SessionStateStore, advance_session_state
 
@@ -157,7 +158,11 @@ async def _ground_explain_turn(
     return cas_result, retrieved_chunks
 
 
-async def _generate_challenge_item(topic_hint: Optional[str], router: Optional[ModelRouter] = None) -> Optional[GeneratedItem]:
+async def _generate_challenge_item(
+    topic_hint: Optional[str],
+    router: Optional[ModelRouter] = None,
+    response_log_store: Optional[ResponseLogStore] = None,
+) -> Optional[GeneratedItem]:
     # Phase 13 (spec §9.6): only tried when there's genuinely no good
     # parametric template for this topic — not as a redundant, costlier
     # alternative to a template that already works. Falls through to the
@@ -170,7 +175,10 @@ async def _generate_challenge_item(topic_hint: Optional[str], router: Optional[M
 
     template_id = select_template_for_topic(topic_hint)
     try:
-        return await generate_item_async(template_id)
+        # Phase 14 (spec §9.7): a real recalibrated difficulty is used
+        # in place of the template's hand-set prior once enough response
+        # history exists for this exact template.
+        return await generate_item_async(template_id, response_log_store=response_log_store)
     except ItemGenerationError as exc:
         logger.warning("Question generation failed for template %s (%s); Tutor falls back to a generic extension prompt", template_id, exc)
         return None
@@ -281,9 +289,11 @@ async def handle_turn(
     review_store: Optional[ReviewStateStore] = None,
     ia_project_store: Optional[IAProjectStateStore] = None,
     ia_disclosure_store: Optional[DisclosureStore] = None,
+    response_log_store: Optional[ResponseLogStore] = None,
     mastery_estimate: Optional[float] = None,
     student_work: Optional[str] = None,
     student_work_image: Optional[bytes] = None,
+    responding_to_template_id: Optional[str] = None,
 ) -> Blackboard:
     """
     Returns the fully populated Blackboard for the turn (not just the bare
@@ -315,6 +325,14 @@ async def handle_turn(
     own id (see the module docstring) — pass a stable per-project value
     across turns so stage tracking and the disclosure log stay scoped to
     the right project.
+
+    `responding_to_template_id` (Phase 14, spec §9.7): pass the
+    `template_id` of a previously served GeneratedItem when this turn's
+    check_work submission is the student's response to it, so the
+    grading outcome gets logged as a real response record
+    (app/questions/response_log.py) feeding future recalibration for
+    that template. Omit it (the default) for check_work submissions on
+    an ad-hoc, non-generated problem — nothing is logged in that case.
     """
     router = router or ModelRouter()
     session_store = session_store or InMemorySessionStateStore()
@@ -323,6 +341,7 @@ async def handle_turn(
     review_store = review_store or get_default_review_state_store()
     ia_project_store = ia_project_store or get_default_ia_project_store()
     ia_disclosure_store = ia_disclosure_store or get_default_disclosure_store()
+    response_log_store = response_log_store or get_default_response_log_store()
 
     blackboard = Blackboard(
         turn_id=str(uuid.uuid4()),
@@ -482,6 +501,20 @@ async def handle_turn(
                     ),
                     [],
                 )
+            if responding_to_template_id is not None:
+                # Phase 14 (spec §9.7): a real response record feeding
+                # future IRT recalibration for this exact template.
+                # Independent of the other three writes above, so it
+                # joins the same concurrent stage batch rather than
+                # being a fourth sequential await.
+                post_grading_stages["response_log_write"] = (
+                    lambda: response_log_store.add(
+                        ItemResponseRecord(
+                            template_id=responding_to_template_id, student_id=student_id, correct=correct
+                        )
+                    ),
+                    [],
+                )
 
             post_grading_results, execution_plan = await run_plan(post_grading_stages)
             blackboard.execution_plan = execution_plan.model_dump(mode="json")
@@ -519,13 +552,13 @@ async def handle_turn(
         blackboard.cas_result = cas_result
         blackboard.retrieved_chunks = retrieved_chunks
     elif action.action_type == ActionType.CHALLENGE:
-        challenge_item = await _generate_challenge_item(intent_result.topic_hint, router)
+        challenge_item = await _generate_challenge_item(intent_result.topic_hint, router, response_log_store)
         blackboard.generated_item = challenge_item
     elif action.action_type == ActionType.QUESTION and action.move == "retrieval_practice" and due_subtopic_id is not None:
         # Phase 9: a real spaced-repetition item for the actual due
         # subtopic, reusing Phase 3's CAS-verified generator rather than
         # inventing a separate item source for review practice.
-        challenge_item = await _generate_challenge_item(due_subtopic_id, router)
+        challenge_item = await _generate_challenge_item(due_subtopic_id, router, response_log_store)
         blackboard.generated_item = challenge_item
 
     response = await tutor_agent.generate(
