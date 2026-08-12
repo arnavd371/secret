@@ -89,6 +89,27 @@ _CAS_GATED_ACTIONS = (ActionType.EXPLAIN,)
 _IA_COACHING_MOVE_PREFIX = "ia_"
 _IA_COACHING_MAX_WORDS = 180
 
+# Phase 16's real gap in the word cap alone: a draft can be short enough
+# to pass the cap and still be a complete, submittable paragraph rather
+# than coaching. Two real, independent signals catch that case:
+#   1. A stock essay-introduction/section-header construction — real
+#      phrasing patterns lifted from how actual IA/EE content typically
+#      opens, not something coaching prose would ever say.
+#   2. For a longer draft, the complete absence of any direct address to
+#      the student ("you"/"your") — genuine coaching is inherently
+#      framed AS talking to the student ("What draws you to...", "Your
+#      research question..."); finished essay content never is. A short
+#      draft is exempted from this check (a one-line "Good catch!" needs
+#      no "you" to still obviously be coaching, not content).
+_ESSAY_OPENING_PATTERNS = [
+    re.compile(r"^\s*this (essay|investigation|study|research|report)\s+(will|aims to|explores|examines|investigates)", re.IGNORECASE),
+    re.compile(r"^\s*in this (essay|investigation|study|research paper)", re.IGNORECASE),
+    re.compile(r"^\s*the (purpose|aim|goal) of this (essay|investigation|study|research)", re.IGNORECASE),
+    re.compile(r"^\s*(introduction|conclusion|abstract)\s*[:\-]", re.IGNORECASE),
+]
+_SECOND_PERSON_MARKERS = re.compile(r"\b(you|your|you're|youre|you've|youve)\b", re.IGNORECASE)
+_MIN_WORDS_FOR_ADDRESS_CHECK = 40
+
 # Heuristic patterns for "this looks like a final numeric/symbolic answer".
 _LEAK_PATTERNS = [
     re.compile(r"\bthe answer is\b", re.IGNORECASE),
@@ -109,14 +130,23 @@ _FINAL_CLAIM_PATTERNS = [
 _STREAM_CHUNK_SIZE = 40
 
 
-def _violates_ia_coaching_word_cap(draft: str, action: Action) -> bool:
+def _reads_like_essay_content(draft: str) -> bool:
+    if any(pattern.search(draft) for pattern in _ESSAY_OPENING_PATTERNS):
+        return True
+    word_count = len(draft.split())
+    return word_count >= _MIN_WORDS_FOR_ADDRESS_CHECK and not _SECOND_PERSON_MARKERS.search(draft)
+
+
+def _violates_ia_coaching_contract(draft: str, action: Action) -> bool:
     if not action.move or not action.move.startswith(_IA_COACHING_MOVE_PREFIX):
         return False
-    return len(draft.split()) > _IA_COACHING_MAX_WORDS
+    if len(draft.split()) > _IA_COACHING_MAX_WORDS:
+        return True
+    return _reads_like_essay_content(draft)
 
 
 def _violates_action_contract(draft: str, action: Action, challenge_item: Optional[GeneratedItem]) -> bool:
-    if _violates_ia_coaching_word_cap(draft, action):
+    if _violates_ia_coaching_contract(draft, action):
         return True
 
     if action.action_type not in _LEAK_SENSITIVE_ACTIONS:

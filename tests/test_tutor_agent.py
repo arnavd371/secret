@@ -433,8 +433,14 @@ async def test_ia_coaching_draft_over_the_word_cap_is_rejected():
 
 @pytest.mark.asyncio
 async def test_ia_coaching_draft_at_exactly_the_cap_passes():
-    at_cap_draft = "word " * 180
-    router = _router_with_canned_response(at_cap_draft.strip())
+    # Realistic-shaped coaching text (direct address present, no essay-
+    # opening pattern) repeated out to exactly the word cap — isolates
+    # the word-count boundary from Phase 16's separate essay-content
+    # heuristic, which a degenerate "word word word..." string would
+    # trip for an unrelated reason (no direct address at all).
+    at_cap_draft = ("Tell me more about your idea and what draws you to it. " * 30).split()
+    at_cap_draft = " ".join(at_cap_draft[:180])
+    router = _router_with_canned_response(at_cap_draft)
     action = Action(action_type=ActionType.EXPLAIN, move="ia_topic_coaching", reason="test")
 
     response = await tutor_agent.generate(action, "help me pick a topic", router)
@@ -451,6 +457,88 @@ async def test_word_cap_does_not_apply_to_a_normal_explain_move():
     action = Action(action_type=ActionType.EXPLAIN, move="direct_explanation", reason="test")
 
     response = await tutor_agent.generate(action, "explain the chain rule", router)
+
+    assert response.ui_metadata["templated"] is False
+
+
+# ---------------------------------------------------------------------------
+# IA/EE output-side content guard (spec §11, Phase 16): the word cap
+# alone doesn't catch a short-but-complete paragraph of actual
+# submittable content, so these are the two real signals that back it up.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ia_coaching_draft_with_an_essay_opening_is_rejected_even_if_short():
+    draft = "This essay will explore the effects of temperature on enzyme activity in living systems."
+    router = _router_with_canned_response(draft)
+    action = Action(action_type=ActionType.EXPLAIN, move="ia_drafting_coaching", reason="test")
+
+    response = await tutor_agent.generate(action, "can you look at my introduction", router)
+
+    assert response.ui_metadata["templated"] is True
+    assert response.text != draft
+
+
+@pytest.mark.asyncio
+async def test_ia_coaching_draft_with_no_direct_address_is_rejected_when_long_enough():
+    # No essay-opening phrase, well under the word cap, but reads as
+    # third-person exposition rather than coaching addressed to a student.
+    draft = (
+        "Enzyme activity depends strongly on temperature, with reaction rates typically increasing up to an "
+        "optimal point before denaturation causes a sharp decline. This relationship is often modeled using "
+        "the Arrhenius equation, which describes the exponential dependence of reaction rate on temperature "
+        "and activation energy across a defined range of conditions studied experimentally over time."
+    )
+    assert len(draft.split()) >= 40
+    router = _router_with_canned_response(draft)
+    action = Action(action_type=ActionType.EXPLAIN, move="ia_analysis_coaching", reason="test")
+
+    response = await tutor_agent.generate(action, "help with my analysis section", router)
+
+    assert response.ui_metadata["templated"] is True
+
+
+@pytest.mark.asyncio
+async def test_short_draft_without_direct_address_is_exempt_from_the_address_check():
+    # Under the word-count floor for the address check - a short
+    # acknowledgment doesn't need "you" to obviously be coaching.
+    draft = "Good instinct. Narrow it down further."
+    router = _router_with_canned_response(draft)
+    action = Action(action_type=ActionType.EXPLAIN, move="ia_topic_coaching", reason="test")
+
+    response = await tutor_agent.generate(action, "is chemistry a good topic", router)
+
+    assert response.ui_metadata["templated"] is False
+    assert response.text == draft
+
+
+@pytest.mark.asyncio
+async def test_long_coaching_draft_with_direct_address_passes():
+    draft = (
+        "Think about what specifically draws you to this topic, and whether you can narrow it to one "
+        "measurable variable relationship. Your research question needs to be answerable with data or sources "
+        "you can realistically access within the word limit, so consider what resources you actually have "
+        "available before committing to a direction, and tell me what you're leaning toward so I can give you "
+        "more specific feedback on it."
+    )
+    assert len(draft.split()) >= 40
+    router = _router_with_canned_response(draft)
+    action = Action(action_type=ActionType.EXPLAIN, move="ia_topic_coaching", reason="test")
+
+    response = await tutor_agent.generate(action, "help me pick a topic", router)
+
+    assert response.ui_metadata["templated"] is False
+    assert response.text == draft
+
+
+@pytest.mark.asyncio
+async def test_essay_opening_check_does_not_apply_to_a_normal_explain_move():
+    draft = "This essay will explore the derivative of x squared, which is 2x by the power rule."
+    router = _router_with_canned_response(draft)
+    action = Action(action_type=ActionType.EXPLAIN, move="direct_explanation", reason="test")
+
+    response = await tutor_agent.generate(action, "explain the power rule", router)
 
     assert response.ui_metadata["templated"] is False
 
