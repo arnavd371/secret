@@ -97,7 +97,7 @@ from app.diagnostician.diagnose import diagnose_misconception
 from app.diagnostician.models import DiagnosisResult
 from app.diagnostician.write_policy import should_write_diagnosis
 from app.examiner.grader import grade_submission
-from app.examiner.models import MarkResult
+from app.examiner.models import ConfidenceTier, MarkResult
 from app.ia_supervisor.disclosure_store import DisclosureStore, get_default_disclosure_store
 from app.ia_supervisor.guard import detect_ghostwriting_request
 from app.ia_supervisor.models import DisclosureAssistanceType, DisclosureEntry, IAProjectState, IAStage
@@ -128,6 +128,9 @@ from app.questions.generator import (
 from app.questions.llm_variant import generate_llm_variant
 from app.questions.mark_scheme import build_mark_scheme
 from app.questions.response_log import ItemResponseRecord, ResponseLogStore, get_default_response_log_store
+from app.review_queue.models import ReviewReason
+from app.review_queue.queue import enqueue_review
+from app.review_queue.store import ReviewQueueStore, get_default_review_queue_store
 from app.questions.models import GeneratedItem
 from app.session.state import InMemorySessionStateStore, ProblemSessionState, SessionStateStore, advance_session_state
 
@@ -290,6 +293,7 @@ async def handle_turn(
     ia_project_store: Optional[IAProjectStateStore] = None,
     ia_disclosure_store: Optional[DisclosureStore] = None,
     response_log_store: Optional[ResponseLogStore] = None,
+    review_queue_store: Optional[ReviewQueueStore] = None,
     mastery_estimate: Optional[float] = None,
     student_work: Optional[str] = None,
     student_work_image: Optional[bytes] = None,
@@ -333,6 +337,12 @@ async def handle_turn(
     (app/questions/response_log.py) feeding future recalibration for
     that template. Omit it (the default) for check_work submissions on
     an ad-hoc, non-generated problem — nothing is logged in that case.
+
+    Human-in-the-loop review (Phase 17, spec §10.10): a real entry is
+    queued (app/review_queue/) whenever this turn's grading came back
+    LOW confidence or flagged, or the Verifier/Critic degraded to its
+    static fallback — signals every earlier phase already computes for
+    real, just not previously surfaced anywhere a human could act on.
     """
     router = router or ModelRouter()
     session_store = session_store or InMemorySessionStateStore()
@@ -342,6 +352,7 @@ async def handle_turn(
     ia_project_store = ia_project_store or get_default_ia_project_store()
     ia_disclosure_store = ia_disclosure_store or get_default_disclosure_store()
     response_log_store = response_log_store or get_default_response_log_store()
+    review_queue_store = review_queue_store or get_default_review_queue_store()
 
     blackboard = Blackboard(
         turn_id=str(uuid.uuid4()),
@@ -501,6 +512,23 @@ async def handle_turn(
                     ),
                     [],
                 )
+            if mark_result.confidence == ConfidenceTier.LOW or mark_result.flags:
+                # Phase 17 (spec §10.10): a real grading-confidence signal
+                # every earlier phase already computes, surfaced to a
+                # human review queue for the first time here.
+                review_reason = (
+                    ReviewReason.UNSUPPORTED_ANSWER_FLAG
+                    if "unsupported_correct_answer" in mark_result.flags
+                    else ReviewReason.LOW_CONFIDENCE_GRADING
+                )
+                review_summary = (
+                    f"{mark_result.total_awarded}/{mark_result.total_available} marks, "
+                    f"confidence={mark_result.confidence.value}, flags={mark_result.flags}"
+                )
+                post_grading_stages["review_queue_write"] = (
+                    lambda: enqueue_review(review_queue_store, blackboard.turn_id, student_id, review_reason, review_summary),
+                    [],
+                )
             if responding_to_template_id is not None:
                 # Phase 14 (spec §9.7): a real response record feeding
                 # future IRT recalibration for this exact template.
@@ -572,6 +600,19 @@ async def handle_turn(
     )
     blackboard.draft_response = response
     blackboard.final_response = response
+
+    if response.ui_metadata.get("critic_degraded"):
+        # Phase 17 (spec §10.10): the Verifier/Critic fell back to its
+        # conservative static check (Phase 6) rather than a real model
+        # critique — a real signal that this turn's response wasn't
+        # independently reviewed the way it normally would be.
+        await enqueue_review(
+            review_queue_store,
+            blackboard.turn_id,
+            student_id,
+            ReviewReason.CRITIC_DEGRADED,
+            f"Verifier/Critic degraded to static fallback for action_type={action.action_type.value}",
+        )
 
     new_state = advance_session_state(current_state, problem_id, intent_result.intent, action)
     await session_store.save(new_state)
