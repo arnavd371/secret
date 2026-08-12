@@ -401,6 +401,61 @@ async def test_plain_retrieval_practice_question_without_an_item_is_unaffected()
 
 
 # ---------------------------------------------------------------------------
+# IA/EE Supervisor coaching word cap (spec §11, Phase 10): a hard,
+# structural response-length limit is the "never full ghostwriting"
+# guarantee's second layer, backstopping the prompt-level instruction.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_short_ia_coaching_draft_passes_through():
+    draft = "What subject area interests you most, and what's one specific question within it?"
+    router = _router_with_canned_response(draft)
+    action = Action(action_type=ActionType.EXPLAIN, move="ia_topic_coaching", reason="test")
+
+    response = await tutor_agent.generate(action, "help me pick a topic", router)
+
+    assert response.ui_metadata["templated"] is False
+    assert response.text == draft
+
+
+@pytest.mark.asyncio
+async def test_ia_coaching_draft_over_the_word_cap_is_rejected():
+    long_draft = "word " * 250  # well over the 180-word cap
+    router = _router_with_canned_response(long_draft)
+    action = Action(action_type=ActionType.EXPLAIN, move="ia_methodology_coaching", reason="test")
+
+    response = await tutor_agent.generate(action, "help with my methodology", router)
+
+    assert response.ui_metadata["templated"] is True
+    assert response.text != long_draft
+
+
+@pytest.mark.asyncio
+async def test_ia_coaching_draft_at_exactly_the_cap_passes():
+    at_cap_draft = "word " * 180
+    router = _router_with_canned_response(at_cap_draft.strip())
+    action = Action(action_type=ActionType.EXPLAIN, move="ia_topic_coaching", reason="test")
+
+    response = await tutor_agent.generate(action, "help me pick a topic", router)
+
+    assert response.ui_metadata["templated"] is False
+
+
+@pytest.mark.asyncio
+async def test_word_cap_does_not_apply_to_a_normal_explain_move():
+    """The word cap is scoped to ia_* moves only — a long, legitimate
+    EXPLAIN response for a normal math turn must not be affected."""
+    long_draft = "word " * 250
+    router = _router_with_canned_response(long_draft)
+    action = Action(action_type=ActionType.EXPLAIN, move="direct_explanation", reason="test")
+
+    response = await tutor_agent.generate(action, "explain the chain rule", router)
+
+    assert response.ui_metadata["templated"] is False
+
+
+# ---------------------------------------------------------------------------
 # Verifier/Critic + escalation/regeneration (spec §13.5, §13.8)
 # ---------------------------------------------------------------------------
 

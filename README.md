@@ -1,6 +1,6 @@
-# AI Tutor - Phases 1-9: Reasoning Core, Verification/Retrieval, Question Generation, Grading, Memory, Quality Control, Multimodal Ingestion, Misconception Diagnosis, Adaptive Learning
+# AI Tutor - Phases 1-10: Reasoning Core, Verification/Retrieval, Question Generation, Grading, Memory, Quality Control, Multimodal Ingestion, Misconception Diagnosis, Adaptive Learning, IA/EE Supervisor
 
-The intelligence layer for an AI-native IB DP Math AA tutoring assistant, built to the Engineering Blueprint v1.0 spec. Covers Phase 1 (reasoning core), Phase 2 (CAS verification + retrieval), Phase 3 (question generation), Phase 4 (grading / AI examiner), Phase 5 (student memory system), Phase 6 (AI quality control), Phase 7 (multimodal ingestion), Phase 8 (misconception diagnosis), and Phase 9 (adaptive learning / spaced repetition).
+The intelligence layer for an AI-native IB DP Math AA tutoring assistant, built to the Engineering Blueprint v1.0 spec. Covers Phase 1 (reasoning core), Phase 2 (CAS verification + retrieval), Phase 3 (question generation), Phase 4 (grading / AI examiner), Phase 5 (student memory system), Phase 6 (AI quality control), Phase 7 (multimodal ingestion), Phase 8 (misconception diagnosis), Phase 9 (adaptive learning / spaced repetition), and Phase 10 (IA/EE Supervisor).
 
 ## What this does
 
@@ -71,7 +71,14 @@ Phase 9, adaptive learning, maintains a real spaced-repetition schedule per (stu
 - On exam_prep, a real due-review query decides the action for real instead of an unconditional stub: something genuinely overdue gets a retrieval-practice question bound to a real, CAS-verified generated item for that exact subtopic (reusing Phase 3's generator, the same way CHALLENGE does); nothing due gets a plain explanation instead of manufacturing a quiz out of nothing.
 - The bound review item's answer is protected by the same structural leak check as a CHALLENGE item, extended to cover QUESTION drafts too.
 
-Not built yet: real curriculum/template content beyond the seed set, the full spec §8.2 misconception catalog (this build covers four named errors with real detection behind them, not the whole syllabus), per-node solution-graph diagnosis for errors that aren't a clean pattern match, the published FSRS algorithm's per-user ML-fitted weights (fixed illustrative parameters are used instead, see Phase 9 above), mastery-threshold review bands beyond a single due/not-due queue, IA supervisor, multi-page PDF or HEIC image intake (PNG/JPEG only), a specialized math-OCR service (a general vision-capable model is used instead, the documented fallback per spec), expression parsing for matrices/integrals-with-limits/piecewise notation, dense/vector retrieval, a reranker, LLM-authored item variants, IRT recalibration from response history, grade-boundary calibration from historical exam data, human-in-the-loop review/appeals, memory consolidation batch jobs, GDPR export/erasure workflows, self-consistency multi-sampling (the CAS/mark-scheme verification this system already has is a stronger deterministic guarantee for the claims that matter, so this was a considered tradeoff, not an oversight), offline eval harness, online guardrail metrics, regression gating, shadow evaluation. These are stubbed with TODOs pointing at the relevant spec section.
+Phase 10, IA/EE Supervisor, runs for ia_ee_help and replaces Phase 1's unconditional-refusal stub with real coaching, guarded against ever ghostwriting:
+
+- A real regex/heuristic guard checks the request itself for a ghostwriting pattern ("write my introduction," "give me a research question," "do my IA for me," and similar) before any coaching is attempted. A detected request is refused, same as before, but now for a real, checked reason rather than unconditionally.
+- A real project-stage state machine (topic selection, research question, methodology, analysis, drafting, revision) classifies what the student's message is actually about from real keywords and advances the project's persisted stage accordingly. Movement is deliberately permissive both forward and backward, since real IA/EE work is iterative, but a project marked COMPLETE (only reachable via genuine submission language, not just "I finished my draft") is a true terminal state: coaching closes for good.
+- Coaching that clears the guard is real: routed through the normal Tutor path with a dedicated hard constraint block and a structural word-count cap (180 words), enforced the same way HINT/QUESTION/CHALLENGE's answer-leak checks are, not just asked for in the prompt.
+- Every ia_ee_help turn writes exactly one entry to a real, append-only, per-project disclosure log, whether coaching was given or a request was refused. A real formatter renders the log into the actual AI-use disclosure statement text a student can include with their submission.
+
+Not built yet: real curriculum/template content beyond the seed set, the full spec §8.2 misconception catalog (this build covers four named errors with real detection behind them, not the whole syllabus), per-node solution-graph diagnosis for errors that aren't a clean pattern match, the published FSRS algorithm's per-user ML-fitted weights (fixed illustrative parameters are used instead, see Phase 9 above), mastery-threshold review bands beyond a single due/not-due queue, per-IB-assessment-criterion rubric feedback for IA/EE coaching (the coaching is real and bounded, but doesn't score against the actual IB criteria A-E), an output-side ghostwriting guard beyond the word cap (the input-side request guard and the word cap are both real; a model that ignored its constraints and wrote a short-but-complete paragraph anyway isn't separately detected), multi-page PDF or HEIC image intake (PNG/JPEG only), a specialized math-OCR service (a general vision-capable model is used instead, the documented fallback per spec), expression parsing for matrices/integrals-with-limits/piecewise notation, dense/vector retrieval, a reranker, LLM-authored item variants, IRT recalibration from response history, grade-boundary calibration from historical exam data, human-in-the-loop review/appeals, memory consolidation batch jobs, GDPR export/erasure workflows, self-consistency multi-sampling (the CAS/mark-scheme verification this system already has is a stronger deterministic guarantee for the claims that matter, so this was a considered tradeoff, not an oversight), offline eval harness, online guardrail metrics, regression gating, shadow evaluation. These are stubbed with TODOs pointing at the relevant spec section.
 
 ## Structure
 
@@ -89,6 +96,7 @@ app/
   multimodal/               image intake validation, PIL preprocessing, math_ocr call, LaTeX normalization, confidence gating
   diagnostician/            misconception catalog, SymPy pattern detectors, model-inference fallback, write policy
   adaptive/                 FSRS-lite scheduling math, review state store, due-review queue
+  ia_supervisor/            ghostwriting guard, stage classifier + state machine, disclosure log + statement
   llm/                      model router: one config file for all model names, one call() entrypoint
   session/state.py          hint ladder session state
   orchestrator/             wires everything together into handle_turn()
@@ -105,13 +113,13 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Run the tests (332 tests, all mocked at the model boundary, no API key or network needed; SymPy, retrieval, item generation, grading, memory math, the grounding check, the multimodal preprocessing/normalization/confidence math, the misconception pattern detectors, and the FSRS scheduling math all run for real):
+Run the tests (377 tests, all mocked at the model boundary, no API key or network needed; SymPy, retrieval, item generation, grading, memory math, the grounding check, the multimodal preprocessing/normalization/confidence math, the misconception pattern detectors, the FSRS scheduling math, and the IA/EE guard/stage classifier/disclosure formatter all run for real):
 
 ```bash
 pytest -q
 ```
 
-Run the scripted demo conversation (shows real mastery climb from three gradings driving a later CHALLENGE decision with no override, a `critique:` line per turn confirming the Verifier/Critic and grounding check ran, an `ingestion:` line for a photographed submission showing the real intake/preprocessing/confidence pipeline running before grading, a `diagnosis:` line for a wrong submission showing the misconception it was pattern-matched to, which then appears in the very next turn's `memory:` line, and an exam_prep turn whose `reason=exam_prep_review_due` and generated item come from a real, pre-seeded-overdue FSRS schedule):
+Run the scripted demo conversation (shows real mastery climb from three gradings driving a later CHALLENGE decision with no override, a `critique:` line per turn confirming the Verifier/Critic and grounding check ran, an `ingestion:` line for a photographed submission showing the real intake/preprocessing/confidence pipeline running before grading, a `diagnosis:` line for a wrong submission showing the misconception it was pattern-matched to, which then appears in the very next turn's `memory:` line, an exam_prep turn whose `reason=exam_prep_review_due` and generated item come from a real, pre-seeded-overdue FSRS schedule, and two ia_ee_help turns (real coaching allowed, then a ghostwriting request refused) with a real disclosure statement rendered from both at the end):
 
 ```bash
 python scripts/run_scripted_conversation.py

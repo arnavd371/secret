@@ -80,6 +80,15 @@ _LEAK_SENSITIVE_ACTIONS = (ActionType.HINT, ActionType.QUESTION, ActionType.CHAL
 # only ones CAS-gated against a ground-truth result.
 _CAS_GATED_ACTIONS = (ActionType.EXPLAIN,)
 
+# IA/EE coaching moves (spec §11's "never full ghostwriting"): a hard,
+# structural cap on response length. A coaching reply that's short enough
+# to be guiding questions and pointed feedback can't also be a draftable
+# essay section; this is enforced the same way HINT/QUESTION/CHALLENGE's
+# answer-leak check is — by inspecting the actual draft, not by trusting
+# the prompt's word-limit instruction alone.
+_IA_COACHING_MOVE_PREFIX = "ia_"
+_IA_COACHING_MAX_WORDS = 180
+
 # Heuristic patterns for "this looks like a final numeric/symbolic answer".
 _LEAK_PATTERNS = [
     re.compile(r"\bthe answer is\b", re.IGNORECASE),
@@ -100,7 +109,16 @@ _FINAL_CLAIM_PATTERNS = [
 _STREAM_CHUNK_SIZE = 40
 
 
+def _violates_ia_coaching_word_cap(draft: str, action: Action) -> bool:
+    if not action.move or not action.move.startswith(_IA_COACHING_MOVE_PREFIX):
+        return False
+    return len(draft.split()) > _IA_COACHING_MAX_WORDS
+
+
 def _violates_action_contract(draft: str, action: Action, challenge_item: Optional[GeneratedItem]) -> bool:
+    if _violates_ia_coaching_word_cap(draft, action):
+        return True
+
     if action.action_type not in _LEAK_SENSITIVE_ACTIONS:
         return False
     if any(pattern.search(draft) for pattern in _LEAK_PATTERNS):

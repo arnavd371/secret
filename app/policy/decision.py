@@ -21,6 +21,7 @@ exactly:
 
 from __future__ import annotations
 
+from app.ia_supervisor.models import IAStage
 from app.models.contracts import (
     Action,
     ActionType,
@@ -41,25 +42,51 @@ HIGH_MASTERY_THRESHOLD = 0.85
 MID_ATTEMPT_HINT_CAP = 2
 
 
+_IA_COACHING_MOVE_BY_STAGE = {
+    IAStage.TOPIC_SELECTION: "ia_topic_coaching",
+    IAStage.RESEARCH_QUESTION: "ia_research_question_coaching",
+    IAStage.METHODOLOGY: "ia_methodology_coaching",
+    IAStage.ANALYSIS: "ia_analysis_coaching",
+    IAStage.DRAFTING: "ia_drafting_coaching",
+    IAStage.REVISION: "ia_revision_coaching",
+}
+
+
 def _route_to_ia_supervisor(signals: DecisionSignals) -> Action:
     """
     Spec §1.5: `if signals.intent == "ia_ee_help": return
     route_to_ia_supervisor(signals) # see 2.10 — never full ghostwriting`.
 
-    The full IA Supervisor Agent (spec §11) — state machine, guard
-    architecture, disclosure logging — is far outside Phase 1's reasoning
-    core and is not built here. This stub preserves the one property that
-    actually matters at this layer: IA/EE help is never routed to a full
-    solve/explain path. It refuses and offers the same legitimate
-    substitute the real IA Supervisor would (methodology/structure
-    coaching), rather than silently falling through to a normal EXPLAIN.
-    TODO(Section 11): replace with a real call into the IA Supervisor Agent.
+    All three real signals this branches on — ia_ghostwriting_request_detected,
+    ia_project_complete, ia_stage — are resolved by the orchestrator from
+    the real IA Supervisor Agent (app/ia_supervisor/, spec §11: guard,
+    state machine, disclosure log) before this pure function runs, same
+    convention as has_due_review/mastery_estimate above.
+
+    Two hard-refusal cases, checked first because they're non-negotiable
+    regardless of stage: a detected ghostwriting request, or a project
+    already marked COMPLETE (a genuine terminal state — coaching closes
+    once a project is done, it doesn't linger indefinitely). Otherwise,
+    real bounded coaching is allowed, routed to the move matching the
+    project's actual current stage so the Tutor prompt's constraints
+    (app/agents/templates.py's IA coaching block) and the disclosure log
+    both reflect what stage of work this was.
     """
-    return Action(
-        action_type=ActionType.REFUSE,
-        offer="ia_methodology_coaching",
-        reason="ia_ee_help_routed_to_stub_supervisor",
-    )
+    if signals.ia_ghostwriting_request_detected:
+        return Action(
+            action_type=ActionType.REFUSE,
+            offer="ia_methodology_coaching",
+            reason="ia_ghostwriting_guard_tripped",
+        )
+    if signals.ia_project_complete:
+        return Action(
+            action_type=ActionType.REFUSE,
+            offer="ia_methodology_coaching",
+            reason="ia_project_already_complete",
+        )
+    stage = signals.ia_stage or IAStage.TOPIC_SELECTION
+    move = _IA_COACHING_MOVE_BY_STAGE.get(stage, "ia_topic_coaching")
+    return Action(action_type=ActionType.EXPLAIN, move=move, reason="ia_supervisor_coaching_allowed")
 
 
 def _schedule_next_review_item(signals: DecisionSignals) -> Action:

@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field
 from app.cas.models import CASResult
 from app.diagnostician.models import DiagnosisResult
 from app.examiner.models import MarkResult
+from app.ia_supervisor.models import DisclosureEntry, IAStage
 from app.knowledge.schemas import RetrievedChunk
 from app.memory.models import MemoryReadContext
 from app.multimodal.models import IngestionResult
@@ -123,6 +124,17 @@ class DecisionSignals(BaseModel):
     # convention as mastery_estimate being pre-resolved from Phase 5's
     # memory read rather than the policy touching the store directly.
     has_due_review: bool = False
+    # Resolved by the orchestrator from the real ghostwriting-request
+    # guard (app/ia_supervisor/guard.py, spec §11) — a pure text check,
+    # computed before the policy runs for the same reason as the other
+    # pre-resolved signals above: the decision policy stays declarative
+    # and I/O-free.
+    ia_ghostwriting_request_detected: bool = False
+    # Resolved by the orchestrator from the real IA/EE project state
+    # machine (app/ia_supervisor/state_machine.py) after persisting this
+    # turn's stage transition.
+    ia_project_complete: bool = False
+    ia_stage: Optional[IAStage] = None
 
 
 class Action(BaseModel):
@@ -267,6 +279,12 @@ class Blackboard(BaseModel):
     # as generated_item/mark_result above: not a field named in spec
     # §2.5's Blackboard schema directly, added as the natural home for it.
     ingestion_result: Optional[IngestionResult] = None
+    # Populated by the IA/EE Supervisor Agent (app/ia_supervisor/, spec
+    # §11) whenever the turn's intent is ia_ee_help — the real disclosure
+    # log entry written for this turn, regardless of whether coaching was
+    # allowed or a ghostwriting request was refused. None for any other
+    # intent. Same rationale as generated_item/mark_result above.
+    ia_disclosure_entry: Optional[DisclosureEntry] = None
 
     decision_action: Optional[Action] = None
     draft_response: Optional[TutorResponse] = None

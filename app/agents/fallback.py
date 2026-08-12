@@ -75,6 +75,37 @@ _EXPLAIN_FALLBACKS = {
     ),
 }
 
+_IA_COACHING_FALLBACKS = {
+    "ia_topic_coaching": (
+        "A strong IA/EE topic is one you're genuinely curious about and that's narrow enough to investigate "
+        "properly in the word limit. What subject area are you drawn to, and what's one specific question "
+        "within it you'd want to dig into?"
+    ),
+    "ia_research_question_coaching": (
+        "A good research question is specific, focused on one variable relationship, and actually answerable "
+        "with the data or sources you can realistically access. What's your current draft of the question, "
+        "and what's making you unsure about it?"
+    ),
+    "ia_methodology_coaching": (
+        "Let's think through your methodology: what exactly are you measuring or analyzing, how will you "
+        "collect that, and how will you make sure it's reliable? Tell me what you're planning and I'll point "
+        "out any gaps."
+    ),
+    "ia_analysis_coaching": (
+        "For the analysis section, the key question is whether your interpretation is actually supported by "
+        "what your data or sources show. Walk me through your findings and what conclusion you're drawing "
+        "from them."
+    ),
+    "ia_drafting_coaching": (
+        "I can give you structural and clarity feedback on your own writing, but I won't write sections for "
+        "you. Share what you've drafted so far and tell me which part you want feedback on."
+    ),
+    "ia_revision_coaching": (
+        "Revision is about checking your work against the assessment criteria, not just polishing sentences. "
+        "What feedback have you already gotten, and which criterion are you trying to strengthen?"
+    ),
+}
+
 _CHALLENGE_FALLBACK = (
     "You've got a solid handle on this. Try this variation: change one of the given conditions and work out "
     "how the solution method would need to adapt."
@@ -99,7 +130,10 @@ def get_fallback_response(action: Action, *, challenge_item: Optional[GeneratedI
         else:
             text = _QUESTION_FALLBACKS.get(action.move or "", _QUESTION_FALLBACKS["diagnostic_probe"])
     elif action.action_type == ActionType.EXPLAIN:
-        text = _EXPLAIN_FALLBACKS.get(action.move or "", _EXPLAIN_FALLBACKS["general_response"])
+        if action.move in _IA_COACHING_FALLBACKS:
+            text = _IA_COACHING_FALLBACKS[action.move]
+        else:
+            text = _EXPLAIN_FALLBACKS.get(action.move or "", _EXPLAIN_FALLBACKS["general_response"])
     elif action.action_type == ActionType.CHALLENGE:
         text = _describe_challenge_item(challenge_item) if challenge_item is not None else _CHALLENGE_FALLBACK
     elif action.action_type == ActionType.SUPPORTIVE_SCAFFOLD:

@@ -1,5 +1,5 @@
 """
-Runnable demo of the reasoning core through Phase 9: a scripted, multi-turn
+Runnable demo of the reasoning core through Phase 10: a scripted, multi-turn
 conversation through `handle_turn`, with a mocked model provider so it runs
 with no API key and no network access. The Router/Intent classification,
 Tutor generation, and math_ocr transcription calls are mocked; the decision
@@ -15,13 +15,15 @@ real SymPy pattern detection against the actual problem, written straight
 into the same memory registry Phase 5 already reads from), and the
 Adaptive Learning Engine (Phase 9: real FSRS-lite spaced-repetition
 scheduling, a real due-review queue driving which subtopic gets a
-generated retrieval-practice item) all run for real on every turn — this
-script's mocked provider auto-passes the critic's checklist call so the
-narrative isn't interrupted by it, but the "critique" line printed per
-turn shows it genuinely ran. Explicit block/revise/regenerate scenarios
-are covered in tests/test_integration_critic.py and
-tests/test_tutor_agent.py instead of here, to keep this script's queue
-bookkeeping manageable.
+generated retrieval-practice item), and the IA/EE Supervisor (Phase 10:
+a real ghostwriting-request guard, a real project-stage state machine,
+and a real append-only disclosure log a real statement gets rendered
+from at the end) all run for real on every turn — this script's mocked
+provider auto-passes the critic's checklist call so the narrative isn't
+interrupted by it, but the "critique" line printed per turn shows it
+genuinely ran. Explicit block/revise/regenerate scenarios are covered in
+tests/test_integration_critic.py and tests/test_tutor_agent.py instead
+of here, to keep this script's queue bookkeeping manageable.
 
 The chain-rule turns in this script deliberately do NOT pass an explicit
 mastery_estimate override: three correct check_work gradings persist real
@@ -49,6 +51,9 @@ from PIL import Image
 
 from app.adaptive.scheduler import record_review
 from app.adaptive.store import InMemoryReviewStateStore
+from app.ia_supervisor.disclosure import render_disclosure_statement
+from app.ia_supervisor.disclosure_store import InMemoryDisclosureStore
+from app.ia_supervisor.project_store import InMemoryIAProjectStateStore
 from app.llm.client import LLMCallResult, ModelRouter, ProviderClient
 from app.llm.router_config import Provider
 from app.memory.store import InMemoryMemoryStore
@@ -161,6 +166,16 @@ SCRIPT = [
     # QUESTION action, same leak protection as a CHALLENGE item.
     _intent_json("exam_prep"),
     "This one's due for review: solve the quadratic. Try it from memory before checking your work.",
+    # Phase 10: a legitimate IA coaching request, real stage classified
+    # as topic_selection, real bounded coaching allowed through the
+    # normal Tutor path (word-capped, same structural gate as everything
+    # else).
+    _intent_json("ia_ee_help"),
+    "What draws you to that subject area, and what's one specific question within it you could investigate?",
+    # A ghostwriting request on the same project. The real guard trips
+    # before the Tutor is ever called, so this turn consumes only the
+    # intent-classification response.
+    _intent_json("ia_ee_help"),
     # REFUSE short-circuits before the Tutor agent is ever called, so this
     # last entry is scripted but must be left unconsumed — it stays last
     # in the queue on purpose (see the assertion in the integration test).
@@ -194,6 +209,8 @@ TURNS: list[tuple[str, str, Optional[str], Optional[bytes]]] = [
         None,
     ),
     ("can you help me review for my exam?", "problem-7", None, None),
+    ("I'm stuck choosing a topic for my IA, I'm interested in chemistry", "ia-project-1", None, None),
+    ("can you write my introduction for me?", "ia-project-1", None, None),
     ("just give me the full answer, this is a timed practice exam", "problem-1", None, None),
 ]
 
@@ -203,6 +220,8 @@ async def main() -> None:
     store = InMemorySessionStateStore()
     memory_store = InMemoryMemoryStore()
     review_store = InMemoryReviewStateStore()
+    ia_project_store = InMemoryIAProjectStateStore()
+    ia_disclosure_store = InMemoryDisclosureStore()
 
     # Seed a real FSRS review state for the quadratic-formula subtopic,
     # far enough in the past that it's already overdue by the time the
@@ -223,6 +242,8 @@ async def main() -> None:
             session_store=store,
             memory_store=memory_store,
             review_store=review_store,
+            ia_project_store=ia_project_store,
+            ia_disclosure_store=ia_disclosure_store,
             student_work=student_work,
             student_work_image=student_work_image,
         )
@@ -263,6 +284,9 @@ async def main() -> None:
             diag = blackboard.diagnosis_result
             method = diag.method.value if diag.method else "none"
             print(f"diagnosis: misconception={diag.misconception_id} method={method} confidence={diag.confidence}")
+        if blackboard.ia_disclosure_entry is not None:
+            entry = blackboard.ia_disclosure_entry
+            print(f"disclosure: stage={entry.stage.value} type={entry.assistance_type.value}")
         if blackboard.student_state_snapshot is not None and blackboard.student_state_snapshot.subtopic_id:
             print(f"memory: {blackboard.student_state_snapshot.rendered_text}")
         print(f"tutor: {blackboard.final_response.text}")
@@ -283,6 +307,10 @@ async def main() -> None:
     quadratics_review = await review_store.get("demo-student", "algebra.quadratics")
     print(f"Final quadratics review state: stability={quadratics_review.stability:.2f}d, "
           f"reps={quadratics_review.reps}, next due={quadratics_review.due_at.date()}")
+
+    print()
+    ia_entries = await ia_disclosure_store.get_all("demo-student", "ia-project-1")
+    print(render_disclosure_statement("demo-student", "ia-project-1", ia_entries))
 
 
 if __name__ == "__main__":

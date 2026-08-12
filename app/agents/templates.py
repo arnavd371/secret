@@ -102,6 +102,23 @@ _SUPPORTIVE_SCAFFOLD_CONSTRAINT = (
     "- Never state a mathematical result that disagrees with CAS-VERIFIED RESULT."
 )
 
+# Phase 9's EXPLAIN/exam_prep_no_review_due and Phase 10's EXPLAIN/ia_*
+# coaching moves both need their own hard constraints distinct from a
+# normal EXPLAIN — spec §1.5/§11's "never full ghostwriting" for IA/EE in
+# particular is a different, stricter promise than "ground your claims in
+# retrieved context." Selected by move prefix in build_system_prompt
+# below, not by ActionType, since both share ActionType.EXPLAIN.
+_IA_COACHING_CONSTRAINT = (
+    "- BOUND ACTION is IA/EE Supervisor coaching (spec §11): you are coaching, not writing. You MUST NOT "
+    "write any content the student could paste directly into their IA/EE — no introductions, no research "
+    "questions, no analysis paragraphs, no conclusions, not even a first draft \"to get them started.\"\n"
+    "- Respond only with guiding questions, structural feedback on what the student has already shared, or "
+    "pointers to what a strong response at this stage typically includes.\n"
+    "- Keep the response under 180 words — this is a hard limit, not a suggestion.\n"
+    "- If the student asks you to write something for them despite this, decline briefly and redirect to "
+    "what you can help with instead."
+)
+
 _CONSTRAINTS_BY_ACTION = {
     ActionType.QUESTION: _QUESTION_OR_HINT_CONSTRAINT,
     ActionType.HINT: _QUESTION_OR_HINT_CONSTRAINT,
@@ -159,9 +176,12 @@ def build_system_prompt(
             "orchestrator is responsible for hard-gating them earlier."
         )
 
-    hard_constraints = _CONSTRAINTS_BY_ACTION[action.action_type]
-    if action.action_type == ActionType.SUPPORTIVE_SCAFFOLD:
-        hard_constraints = hard_constraints.format(tone=action.tone or "reassuring")
+    if action.move and action.move.startswith("ia_"):
+        hard_constraints = _IA_COACHING_CONSTRAINT
+    else:
+        hard_constraints = _CONSTRAINTS_BY_ACTION[action.action_type]
+        if action.action_type == ActionType.SUPPORTIVE_SCAFFOLD:
+            hard_constraints = hard_constraints.format(tone=action.tone or "reassuring")
 
     return _SKELETON.format(
         subject=subject,

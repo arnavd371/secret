@@ -8,6 +8,7 @@ is pure, so every test is a plain call + assert, no mocking required.
 Cases are traced directly to the spec §1.5 pseudocode and decision table.
 """
 
+from app.ia_supervisor.models import IAStage
 from app.models.contracts import (
     ActionType,
     AssessmentMode,
@@ -104,17 +105,48 @@ def test_graded_take_home_with_low_risk_does_not_hard_gate():
 # ---------------------------------------------------------------------------
 
 
-def test_ia_ee_help_never_gets_a_normal_solve_action():
-    action = decide_pedagogical_action(_signals(intent=IntentType.IA_EE_HELP))
+def test_ia_ee_help_with_detected_ghostwriting_request_is_refused():
+    action = decide_pedagogical_action(
+        _signals(intent=IntentType.IA_EE_HELP, ia_ghostwriting_request_detected=True)
+    )
     assert action.action_type == ActionType.REFUSE
     assert action.offer == "ia_methodology_coaching"
+    assert action.reason == "ia_ghostwriting_guard_tripped"
+
+
+def test_ia_ee_help_on_a_completed_project_is_refused():
+    action = decide_pedagogical_action(
+        _signals(intent=IntentType.IA_EE_HELP, ia_project_complete=True)
+    )
+    assert action.action_type == ActionType.REFUSE
+    assert action.reason == "ia_project_already_complete"
+
+
+def test_ia_ee_help_with_no_guard_tripped_gets_real_bounded_coaching():
+    action = decide_pedagogical_action(
+        _signals(intent=IntentType.IA_EE_HELP, ia_stage=IAStage.METHODOLOGY)
+    )
+    assert action.action_type == ActionType.EXPLAIN
+    assert action.move == "ia_methodology_coaching"
+    assert action.reason == "ia_supervisor_coaching_allowed"
+
+
+def test_ia_ee_help_with_no_stage_resolved_defaults_to_topic_coaching():
+    action = decide_pedagogical_action(_signals(intent=IntentType.IA_EE_HELP))
+    assert action.move == "ia_topic_coaching"
 
 
 def test_ia_ee_help_routes_before_mastery_shortcut():
     """A student with high mastery asking for IA help must not be
-    CHALLENGE'd — IA routing takes priority over the mastery shortcut."""
+    CHALLENGE'd — IA routing takes priority over the mastery shortcut,
+    regardless of which IA branch (refuse or coach) it resolves to."""
     action = decide_pedagogical_action(
-        _signals(intent=IntentType.IA_EE_HELP, mastery_estimate=0.99, attempt_count=1)
+        _signals(
+            intent=IntentType.IA_EE_HELP,
+            mastery_estimate=0.99,
+            attempt_count=1,
+            ia_ghostwriting_request_detected=True,
+        )
     )
     assert action.action_type == ActionType.REFUSE
     assert action.action_type != ActionType.CHALLENGE

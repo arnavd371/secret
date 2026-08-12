@@ -52,6 +52,19 @@ QUESTION action the same way an extension item is bound to CHALLENGE.
 Every graded check_work submission (typed or photographed) also updates
 FSRS state for its subtopic, same hook point as Phase 5's mastery write
 and Phase 8's misconception write.
+
+IA/EE Supervisor (Phase 10, spec §11): on an ia_ee_help turn, the real
+ghostwriting guard (app.ia_supervisor.guard) and the real project stage
+machine (app.ia_supervisor.state_machine) both run before the decision
+policy, resolving DecisionSignals.ia_ghostwriting_request_detected/
+ia_project_complete/ia_stage for real. `problem_id` doubles as the IA/EE
+project's own id for this intent — the same parameter every other intent
+already threads through for hint-ladder/session-state purposes, reused
+here rather than adding a second project-identifying parameter. Every
+ia_ee_help turn writes exactly one real DisclosureEntry (coaching
+allowed, ghostwriting refused, or project-already-complete), regardless
+of which branch the decision resolves to — the disclosure log's job is
+to document what happened, not just the successful path.
 """
 
 from __future__ import annotations
@@ -74,6 +87,12 @@ from app.diagnostician.models import DiagnosisResult
 from app.diagnostician.write_policy import should_write_diagnosis
 from app.examiner.grader import grade_submission
 from app.examiner.models import MarkResult
+from app.ia_supervisor.disclosure_store import DisclosureStore, get_default_disclosure_store
+from app.ia_supervisor.guard import detect_ghostwriting_request
+from app.ia_supervisor.models import DisclosureAssistanceType, DisclosureEntry, IAProjectState, IAStage
+from app.ia_supervisor.project_store import IAProjectStateStore, get_default_ia_project_store
+from app.ia_supervisor.stage_classifier import classify_stage
+from app.ia_supervisor.state_machine import advance_stage
 from app.knowledge.retriever import KnowledgeBase, get_default_knowledge_base
 from app.knowledge.schemas import RetrievedChunk
 from app.llm.client import ModelRouter
@@ -232,6 +251,8 @@ async def handle_turn(
     knowledge_base: Optional[KnowledgeBase] = None,
     memory_store: Optional[MemoryStore] = None,
     review_store: Optional[ReviewStateStore] = None,
+    ia_project_store: Optional[IAProjectStateStore] = None,
+    ia_disclosure_store: Optional[DisclosureStore] = None,
     mastery_estimate: Optional[float] = None,
     student_work: Optional[str] = None,
     student_work_image: Optional[bytes] = None,
@@ -261,12 +282,19 @@ async def handle_turn(
     memory-derived mastery for this turn (useful for tests/simulation, or
     a caller that already has its own signal). Left as None (the
     default), the real persisted mastery for the turn's topic is used.
+
+    For an ia_ee_help turn, `problem_id` is reused as the IA/EE project's
+    own id (see the module docstring) — pass a stable per-project value
+    across turns so stage tracking and the disclosure log stay scoped to
+    the right project.
     """
     router = router or ModelRouter()
     session_store = session_store or InMemorySessionStateStore()
     knowledge_base = knowledge_base or get_default_knowledge_base()
     memory_store = memory_store or get_default_memory_store()
     review_store = review_store or get_default_review_state_store()
+    ia_project_store = ia_project_store or get_default_ia_project_store()
+    ia_disclosure_store = ia_disclosure_store or get_default_disclosure_store()
 
     blackboard = Blackboard(
         turn_id=str(uuid.uuid4()),
@@ -304,6 +332,21 @@ async def handle_turn(
     if intent_result.intent == IntentType.EXAM_PREP:
         due_subtopic_id = await most_overdue_subtopic(review_store, student_id)
 
+    # IA/EE Supervisor (Phase 10, spec §11): same convention — the real
+    # guard and state-machine transition both run here, before the
+    # policy, so decide_pedagogical_action only ever sees pre-resolved
+    # booleans/enums.
+    ia_project_id: Optional[str] = None
+    ia_ghostwriting_evidence: Optional[str] = None
+    ia_new_stage: Optional[IAStage] = None
+    if intent_result.intent == IntentType.IA_EE_HELP:
+        ia_project_id = problem_id or f"default-ia-project:{student_id}"
+        ia_ghostwriting_evidence = detect_ghostwriting_request(raw_input)
+        existing_ia_project = await ia_project_store.get(student_id, ia_project_id)
+        classified_stage = classify_stage(raw_input)
+        ia_new_stage = advance_stage(existing_ia_project.stage if existing_ia_project else None, classified_stage)
+        await ia_project_store.save(IAProjectState(student_id=student_id, project_id=ia_project_id, stage=ia_new_stage))
+
     signals = DecisionSignals(
         intent=intent_result.intent,
         mastery_estimate=resolved_mastery_estimate,
@@ -313,10 +356,37 @@ async def handle_turn(
         frustration_signal=estimate_frustration(raw_input),
         hint_ladder_level=current_state.hint_ladder_level,
         has_due_review=due_subtopic_id is not None,
+        ia_ghostwriting_request_detected=ia_ghostwriting_evidence is not None,
+        ia_project_complete=ia_new_stage == IAStage.COMPLETE,
+        ia_stage=ia_new_stage,
     )
 
     action = decide_pedagogical_action(signals)
     blackboard.decision_action = action
+
+    # Disclosure logging (Phase 10, spec §11): exactly one real entry per
+    # ia_ee_help turn, regardless of which branch the decision resolved
+    # to — the log documents what happened, including a refusal.
+    if intent_result.intent == IntentType.IA_EE_HELP:
+        if action.reason == "ia_ghostwriting_guard_tripped":
+            assistance_type = DisclosureAssistanceType.GHOSTWRITING_REQUEST_REFUSED
+            summary = f"Request declined (matched pattern: {ia_ghostwriting_evidence})."
+        elif action.reason == "ia_project_already_complete":
+            assistance_type = DisclosureAssistanceType.PROJECT_ALREADY_COMPLETE
+            summary = "Project already marked complete; no further assistance given."
+        else:
+            assistance_type = DisclosureAssistanceType.COACHING
+            summary = f"Coaching feedback provided for the {ia_new_stage.value} stage."
+
+        disclosure_entry = DisclosureEntry(
+            student_id=student_id,
+            project_id=ia_project_id,
+            stage=ia_new_stage,
+            assistance_type=assistance_type,
+            summary=summary,
+        )
+        await ia_disclosure_store.add(disclosure_entry)
+        blackboard.ia_disclosure_entry = disclosure_entry
 
     # Hard gate: REFUSE short-circuits here. The Tutor agent (and CAS/
     # retrieval/generation/grading) is never invoked for a REFUSE action,
