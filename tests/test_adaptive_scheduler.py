@@ -8,7 +8,16 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.adaptive.scheduler import get_due_subtopics, most_overdue_subtopic, record_review
+from app.adaptive.models import ReviewUrgency
+from app.adaptive.scheduler import (
+    MILD_RETRIEVABILITY_THRESHOLD,
+    SIGNIFICANT_RETRIEVABILITY_THRESHOLD,
+    compute_review_urgency,
+    get_due_subtopics,
+    get_due_subtopics_with_urgency,
+    most_overdue_subtopic,
+    record_review,
+)
 from app.adaptive.store import InMemoryReviewStateStore
 
 NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -91,3 +100,82 @@ async def test_due_states_are_scoped_per_student():
     state = await record_review(store, "stu-1", "topic.a", False, NOW)
     due_for_other_student = await get_due_subtopics(store, "stu-2", state.due_at + timedelta(days=1))
     assert due_for_other_student == []
+
+
+# ---------------------------------------------------------------------------
+# Phase 15: mastery-threshold review bands (real retrievability-based
+# urgency, not a flat days-overdue count)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_urgency_right_at_due_at_is_mild():
+    store = InMemoryReviewStateStore()
+    state = await record_review(store, "stu-1", "topic.a", True, NOW)
+    # due_at is defined as the point where retrievability = 0.9 (desired
+    # retention) - well above the MILD threshold.
+    urgency, r = compute_review_urgency(state, state.due_at)
+    assert urgency == ReviewUrgency.MILD
+    assert r == pytest.approx(0.9, abs=0.01)
+
+
+@pytest.mark.asyncio
+async def test_urgency_far_past_due_is_critical():
+    store = InMemoryReviewStateStore()
+    state = await record_review(store, "stu-1", "topic.a", True, NOW)
+    urgency, r = compute_review_urgency(state, state.due_at + timedelta(days=365))
+    assert urgency == ReviewUrgency.CRITICAL
+    assert r < SIGNIFICANT_RETRIEVABILITY_THRESHOLD
+
+
+@pytest.mark.asyncio
+async def test_urgency_bands_are_ordered_by_time_elapsed():
+    store = InMemoryReviewStateStore()
+    state = await record_review(store, "stu-1", "topic.a", True, NOW)
+
+    _, r_mild = compute_review_urgency(state, state.due_at)
+    _, r_significant = compute_review_urgency(state, state.due_at + timedelta(days=5))
+    _, r_critical = compute_review_urgency(state, state.due_at + timedelta(days=50))
+    assert r_mild > r_significant > r_critical
+
+
+@pytest.mark.asyncio
+async def test_lower_stability_item_is_more_urgent_at_equal_days_overdue():
+    """The real point of retrievability-based ranking over a flat
+    days-overdue count: two items overdue by the same number of days can
+    be at genuinely different forgetting risk if their stabilities
+    differ."""
+    store = InMemoryReviewStateStore()
+    stable = await record_review(store, "stu-1", "topic.stable", True, NOW)  # stability 2.5
+    fragile = await record_review(store, "stu-1", "topic.fragile", False, NOW)  # stability 0.5
+
+    query_time = NOW + timedelta(days=30)
+    _, r_stable = compute_review_urgency(stable, query_time)
+    _, r_fragile = compute_review_urgency(fragile, query_time)
+    assert r_fragile < r_stable
+
+
+@pytest.mark.asyncio
+async def test_get_due_subtopics_with_urgency_ranks_most_forgotten_first():
+    store = InMemoryReviewStateStore()
+    await record_review(store, "stu-1", "topic.stable", True, NOW)
+    await record_review(store, "stu-1", "topic.fragile", False, NOW)
+
+    query_time = NOW + timedelta(days=30)
+    ranked = await get_due_subtopics_with_urgency(store, "stu-1", query_time)
+
+    assert [state.subtopic_id for state, _u, _r in ranked] == ["topic.fragile", "topic.stable"]
+    # retrievability strictly ascending (most urgent first)
+    assert ranked[0][2] < ranked[1][2]
+
+
+@pytest.mark.asyncio
+async def test_get_due_subtopics_with_urgency_excludes_not_yet_due_items():
+    store = InMemoryReviewStateStore()
+    await record_review(store, "stu-1", "topic.a", True, NOW)
+    ranked = await get_due_subtopics_with_urgency(store, "stu-1", NOW)
+    assert ranked == []
+
+
+def test_retrievability_thresholds_are_ordered():
+    assert 0.0 < SIGNIFICANT_RETRIEVABILITY_THRESHOLD < MILD_RETRIEVABILITY_THRESHOLD < 1.0

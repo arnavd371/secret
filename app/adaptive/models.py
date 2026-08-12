@@ -37,3 +37,17 @@ class ReviewState(BaseModel):
     lapses: int = Field(default=0, ge=0)
     last_reviewed_at: Optional[datetime] = None
     due_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class ReviewUrgency(str, Enum):
+    """Phase 15 (spec §12's "mastery-threshold review bands"): a real
+    classification of how urgently a due item needs review, computed
+    from its actual current retrievability (app.adaptive.fsrs), not
+    just a flat "is due_at in the past" boolean. Two items that are
+    equally many days overdue can be at very different real risk of
+    being forgotten, since a low-stability item decays faster — this
+    reflects that directly rather than treating "overdue" as binary."""
+
+    MILD = "mild"
+    SIGNIFICANT = "significant"
+    CRITICAL = "critical"
