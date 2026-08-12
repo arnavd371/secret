@@ -1,5 +1,5 @@
 """
-Runnable demo of the reasoning core through Phase 10: a scripted, multi-turn
+Runnable demo of the reasoning core through Phase 11: a scripted, multi-turn
 conversation through `handle_turn`, with a mocked model provider so it runs
 with no API key and no network access. The Router/Intent classification,
 Tutor generation, and math_ocr transcription calls are mocked; the decision
@@ -15,15 +15,19 @@ real SymPy pattern detection against the actual problem, written straight
 into the same memory registry Phase 5 already reads from), and the
 Adaptive Learning Engine (Phase 9: real FSRS-lite spaced-repetition
 scheduling, a real due-review queue driving which subtopic gets a
-generated retrieval-practice item), and the IA/EE Supervisor (Phase 10:
-a real ghostwriting-request guard, a real project-stage state machine,
-and a real append-only disclosure log a real statement gets rendered
-from at the end) all run for real on every turn — this script's mocked
-provider auto-passes the critic's checklist call so the narrative isn't
-interrupted by it, but the "critique" line printed per turn shows it
-genuinely ran. Explicit block/revise/regenerate scenarios are covered in
-tests/test_integration_critic.py and tests/test_tutor_agent.py instead
-of here, to keep this script's queue bookkeeping manageable.
+generated retrieval-practice item), the IA/EE Supervisor (Phase 10: a
+real ghostwriting-request guard, a real project-stage state machine, and
+a real append-only disclosure log a real statement gets rendered from at
+the end), and the Planner (Phase 11: the post-grading mastery write,
+review record, and diagnosis genuinely run concurrently via a real
+dependency-graph executor rather than three sequential awaits, printed
+per graded turn as a `plan:` line) all run for real on every turn — this
+script's mocked provider auto-passes the critic's checklist call so the
+narrative isn't interrupted by it, but the "critique" line printed per
+turn shows it genuinely ran. Explicit block/revise/regenerate scenarios
+are covered in tests/test_integration_critic.py and
+tests/test_tutor_agent.py instead of here, to keep this script's queue
+bookkeeping manageable.
 
 The chain-rule turns in this script deliberately do NOT pass an explicit
 mastery_estimate override: three correct check_work gradings persist real
@@ -280,6 +284,10 @@ async def main() -> None:
         if blackboard.mark_result is not None:
             mr = blackboard.mark_result
             print(f"grading: {mr.total_awarded}/{mr.total_available} marks, confidence={mr.confidence.value}, flags={mr.flags}")
+        if blackboard.execution_plan is not None:
+            stages = blackboard.execution_plan["stages"]
+            stage_summary = ", ".join(f"{s['name']}({s['duration_ms']}ms)" for s in stages)
+            print(f"plan: [{stage_summary}] ran concurrently in {blackboard.execution_plan['total_duration_ms']}ms total")
         if blackboard.diagnosis_result is not None:
             diag = blackboard.diagnosis_result
             method = diag.method.value if diag.method else "none"

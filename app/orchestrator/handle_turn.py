@@ -37,10 +37,21 @@ supplied `mastery_estimate` always overrides the memory-derived value
 (useful for tests/simulation and callers who already have their own
 signal), matching how the parameter already worked in earlier phases.
 
-The orchestrator still runs a fixed linear sequence rather than the
-Planner's parallel stage graph (spec §6) — the Planner agent remains a
-later-phase non-goal (see the TODO on Blackboard.execution_plan in
-app/models/contracts.py).
+Planner Agent (Phase 11, spec §6): the orchestrator still runs a fixed
+linear sequence for almost every stage — deliberately, because almost
+every stage genuinely depends on the previous one's output (you can't
+classify intent before reading raw_input, decide an action before
+classifying intent, or generate before deciding an action). The one
+place with real, independent side effects is the post-grading writes: a
+completed check_work grading feeds Phase 5's mastery write, Phase 8's
+misconception diagnosis, and Phase 9's review record, none of which
+depend on each other or on one another's output. Those three now run as
+a real concurrent stage graph via app.planner.executor.run_plan rather
+than three sequential awaits, and the actual executed plan (per-stage
+timing, dependencies, any isolated failure) is stored on
+Blackboard.execution_plan for real — not a rewrite of every branch's
+sequencing, which would mean inventing parallelism between stages that
+are genuinely sequential.
 
 Adaptive Learning Engine (Phase 9, spec §12): on an exam_prep turn, the
 real FSRS due-review queue (app.adaptive.scheduler) is consulted before
@@ -96,6 +107,7 @@ from app.ia_supervisor.state_machine import advance_stage
 from app.knowledge.retriever import KnowledgeBase, get_default_knowledge_base
 from app.knowledge.schemas import RetrievedChunk
 from app.llm.client import ModelRouter
+from app.planner.executor import StageGraph, run_plan
 from app.memory.bkt import update_bkt
 from app.memory.context_assembly import assemble_memory_context
 from app.memory.decay import effective_mastery
@@ -419,25 +431,48 @@ async def handle_turn(
         if grading is not None:
             mark_result, math_task, cas_result = grading
             blackboard.mark_result = mark_result
-            await _write_mastery_from_grading(student_id, intent_result.topic_hint, mark_result, memory_store)
-            # Adaptive Learning Engine (Phase 9): every graded attempt is a
-            # real spaced-repetition review, regardless of the grading's
-            # own confidence tier — unlike the mastery write above, this
-            # isn't gated on confidence, since the review itself genuinely
-            # happened even when extracting a clean mark from it didn't
-            # go perfectly.
+
+            # Planner Agent (Phase 11, spec §6): the mastery write
+            # (Phase 5), review record (Phase 9), and diagnosis (Phase 8)
+            # all key only off mark_result — none depends on either of
+            # the others — so they run as a real concurrent stage graph
+            # instead of three sequential awaits.
+            correct = mark_result.total_available > 0 and mark_result.total_awarded == mark_result.total_available
+            diagnosis_needed = mark_result.total_available > 0 and mark_result.total_awarded < mark_result.total_available
+
+            post_grading_stages: StageGraph = {
+                "mastery_write": (
+                    lambda: _write_mastery_from_grading(student_id, intent_result.topic_hint, mark_result, memory_store),
+                    [],
+                ),
+            }
             if intent_result.topic_hint:
-                correct = mark_result.total_available > 0 and mark_result.total_awarded == mark_result.total_available
-                await record_review(review_store, student_id, intent_result.topic_hint, correct)
+                # Every graded attempt is a real spaced-repetition review,
+                # regardless of the grading's own confidence tier —
+                # unlike the mastery write above, this isn't gated on
+                # confidence, since the review itself genuinely happened
+                # even when extracting a clean mark from it didn't go
+                # perfectly.
+                post_grading_stages["review_record"] = (
+                    lambda: record_review(review_store, student_id, intent_result.topic_hint, correct),
+                    [],
+                )
+            if diagnosis_needed:
+                # Only worth running when marks were actually missed — a
+                # fully correct submission has nothing to diagnose.
+                post_grading_stages["diagnosis"] = (
+                    lambda: _diagnose_and_write_misconception(
+                        router, student_id, math_task, cas_result, student_work, memory_store
+                    ),
+                    [],
+                )
+
+            post_grading_results, execution_plan = await run_plan(post_grading_stages)
+            blackboard.execution_plan = execution_plan.model_dump(mode="json")
 
             response_text = mark_result.comment
-            # Misconception Diagnostician (Phase 8, spec §8): only worth
-            # running when marks were actually missed — a fully correct
-            # submission has nothing to diagnose.
-            if mark_result.total_available > 0 and mark_result.total_awarded < mark_result.total_available:
-                diagnosis = await _diagnose_and_write_misconception(
-                    router, student_id, math_task, cas_result, student_work, memory_store
-                )
+            diagnosis = post_grading_results.get("diagnosis")
+            if diagnosis is not None:
                 blackboard.diagnosis_result = diagnosis
                 if should_write_diagnosis(diagnosis):
                     response_text += f" This looks like a specific, recognizable error: {describe(diagnosis.misconception_id)}"
