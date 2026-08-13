@@ -15,6 +15,17 @@
         integrity="sha384-7zkQWkzuo3B5mTepMUcHkMB5jZaolc2xDwL6VFqjFALcbeS9Ggm/Yr2r3Dy4lfFg" crossorigin="anonymous"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"
         integrity="sha384-43gviWU0YVjaDtb/GhzOouOXtZMP/7XUzwPTstBeZFe/+rCMvRwr4yROQP43s0Xk" crossorigin="anonymous"></script>
+<!-- marked (Markdown -> HTML) + DOMPurify (sanitizer): the system
+     prompt tells the Tutor to output real Markdown ("## Header",
+     "**bold**", numbered lists), and it was showing up as literal
+     syntax with nothing to render it. DOMPurify sanitizes the parsed
+     HTML before it's ever set via innerHTML - this replaces the
+     previous textContent-only safety story with a real sanitization
+     pass instead, not a weaker one. Pinned versions + real SRI hashes. -->
+<script defer src="https://cdn.jsdelivr.net/npm/marked@13.0.3/marked.min.js"
+        integrity="sha384-YTBHtsL8yVTHcLakYNyrOfK3K+QQcXiECuaALJ+3j7Mo681Rtzadt8NR6WrZH+eQ" crossorigin="anonymous"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"
+        integrity="sha384-+VfUPEb0PdtChMwmBcBmykRMDd+v6D/oFmB3rZM/puCMDYcIvF968OimRh4KQY9a" crossorigin="anonymous"></script>
 <style>
   :root {
     /* Background matched to aethra.co.in's own (#dceaf9 flat + a
@@ -177,6 +188,40 @@
     overflow-y: hidden;
     padding-bottom: 2px;
   }
+  /* Markdown elements marked.js produces (h1-h6/**bold**/lists/code) -
+     the system prompt tells the model to output real Markdown, this is
+     what it renders into inside a bubble. */
+  .bubble > :first-child { margin-top: 0; }
+  .bubble > :last-child { margin-bottom: 0; }
+  .bubble p { margin: 0 0 10px; }
+  .bubble h1, .bubble h2, .bubble h3, .bubble h4 {
+    margin: 14px 0 8px;
+    font-size: 1em;
+    font-weight: 700;
+  }
+  .bubble ul, .bubble ol { margin: 0 0 10px; padding-left: 22px; }
+  .bubble li { margin: 4px 0; }
+  .bubble code {
+    background: var(--badge-bg);
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-size: 0.92em;
+  }
+  .bubble pre {
+    background: var(--badge-bg);
+    border-radius: 8px;
+    padding: 10px 12px;
+    overflow-x: auto;
+    margin: 0 0 10px;
+  }
+  .bubble pre code { background: none; padding: 0; }
+  .bubble blockquote {
+    margin: 0 0 10px;
+    padding-left: 12px;
+    border-left: 3px solid var(--border);
+    color: var(--muted);
+  }
+  .bubble a { color: var(--accent); }
   #help-btn {
     width: 28px;
     height: 28px;
@@ -396,13 +441,10 @@ function badge(cls, text) {
 
 // KaTeX auto-render walks the *already-rendered* DOM subtree looking for
 // delimited math and replacing just those spans - it never touches how
-// the surrounding text got there. Every bubble above is still built with
-// textContent (never innerHTML), so a draft that happened to contain
-// "<script>" or any other HTML-looking text is inert either way; this
-// only adds math typesetting on top of that, it doesn't loosen it.
-// Guarded by typeof in case the CDN script hasn't finished loading yet
-// (or failed to load at all) - math delimiters just render as their
-// literal source text instead, never a page-breaking error.
+// the surrounding text got there. Guarded by typeof in case the CDN
+// script hasn't finished loading yet (or failed to load at all) - math
+// delimiters just render as their literal source text instead, never a
+// page-breaking error.
 function renderMath(el) {
   if (typeof renderMathInElement !== "function") return;
   try {
@@ -420,9 +462,62 @@ function renderMath(el) {
   }
 }
 
+// Real Markdown -> HTML rendering (the system prompt tells the Tutor to
+// output Markdown - "## Header", "**bold**", numbered lists - so a
+// student should see that structure, not the literal syntax). Content
+// is set via innerHTML here, a real change from the textContent-only
+// approach the KaTeX-only version of this file used - DOMPurify.sanitize
+// is the real safety boundary now, not "never innerHTML at all".
+//
+// Math segments are protected before Markdown ever sees the text:
+// marked treats "\(" as a backslash-escaped "(" (a real, confirmed
+// bug caught before shipping - marked.parse() silently strips the
+// backslash from "\(a_{ij}\)", which would make renderMath's own
+// delimiter search find nothing afterward). Every \( \)/\[ \]/$ $/$$ $$
+// segment is pulled out into an opaque "@@MATHn@@" placeholder first,
+// Markdown runs on text that no longer contains anything that looks
+// like a LaTeX delimiter, and the real math source is swapped back in
+// as plain text immediately before renderMath's own pass typesets it -
+// two clearly separated passes instead of one fighting the other.
+const _MATH_SEGMENT_PATTERN = /\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|\$\$[\s\S]*?\$\$|\$[^\n$]*?\$/g;
+
+function _restoreMathPlaceholders(root, segments) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const textNodes = [];
+  let node;
+  while ((node = walker.nextNode())) textNodes.push(node);
+  for (const textNode of textNodes) {
+    if (!textNode.nodeValue.includes("@@MATH")) continue;
+    textNode.nodeValue = textNode.nodeValue.replace(
+      /@@MATH(\d+)@@/g,
+      (_, i) => segments[Number(i)] ?? ""
+    );
+  }
+}
+
+function renderBubbleText(container, text) {
+  if (typeof marked === "undefined" || typeof DOMPurify === "undefined") {
+    container.textContent = text;
+    return;
+  }
+  try {
+    const segments = [];
+    const protectedText = text.replace(_MATH_SEGMENT_PATTERN, (match) => {
+      segments.push(match);
+      return `@@MATH${segments.length - 1}@@`;
+    });
+    const rawHtml = marked.parse(protectedText, { breaks: true });
+    container.innerHTML = DOMPurify.sanitize(rawHtml);
+    if (segments.length) _restoreMathPlaceholders(container, segments);
+  } catch (err) {
+    console.warn("Markdown render failed, showing raw text instead:", err);
+    container.textContent = text;
+  }
+}
+
 function addTutorBubble(data) {
   addRow("tutor", (bubble) => {
-    bubble.textContent = data.text;
+    renderBubbleText(bubble, data.text);
 
     const meta = document.createElement("div");
     meta.className = "meta";
@@ -436,21 +531,21 @@ function addTutorBubble(data) {
     if (data.generated_item_stem) {
       const card = document.createElement("div");
       card.className = "card";
-      card.textContent = data.generated_item_stem;
+      renderBubbleText(card, data.generated_item_stem);
       bubble.appendChild(card);
     }
 
     if (data.mark_result && data.mark_result.comment) {
       const card = document.createElement("div");
       card.className = "card";
-      card.textContent = data.mark_result.comment;
+      renderBubbleText(card, data.mark_result.comment);
       bubble.appendChild(card);
     }
 
     if (data.misconception) {
       const card = document.createElement("div");
       card.className = "card";
-      card.textContent = "Misconception: " + data.misconception.description;
+      renderBubbleText(card, "Misconception: " + data.misconception.description);
       bubble.appendChild(card);
     }
 
