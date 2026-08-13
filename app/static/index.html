@@ -17,18 +17,33 @@
         integrity="sha384-43gviWU0YVjaDtb/GhzOouOXtZMP/7XUzwPTstBeZFe/+rCMvRwr4yROQP43s0Xk" crossorigin="anonymous"></script>
 <style>
   :root {
-    --bg: #0f1115;
-    --panel: #171a21;
-    --border: #2a2e38;
-    --text: #e7e9ee;
-    --muted: #8b93a3;
-    --accent: #5b8cff;
-    --student-bubble: #24304a;
-    --tutor-bubble: #1c2028;
-    --badge-bg: #232838;
-    --danger: #ff6b6b;
-    --ok: #4fd18b;
+    /* Background matched to aethra.co.in's own (#dceaf9 flat + a
+       fixed, 0.05-opacity SVG fractal-noise grain overlay, replicated
+       below as #ink-noise using the exact same data URI) - every other
+       token here is a light-theme palette derived to stay readable
+       against that specific background, not aethra's own text colors
+       wholesale. */
+    --bg: #dceaf9;
+    --panel: #cfe0f2;
+    --border: #b7cbdf;
+    --text: #0a1220;
+    --muted: #52627a;
+    --accent: #2f5fd6;
+    --student-bubble: #bcd6f5;
+    --tutor-bubble: #f2f8fd;
+    --badge-bg: #dbe8f5;
+    --danger: #b3261e;
+    --ok: #1f7a4d;
   }
+  #ink-noise {
+    position: fixed;
+    inset: 0;
+    z-index: 1;
+    pointer-events: none;
+    opacity: 0.05;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+  }
+  header, #chat, footer, #help-overlay { position: relative; z-index: 2; }
   * { box-sizing: border-box; }
   html, body { height: 100%; }
   body {
@@ -205,6 +220,7 @@
 </style>
 </head>
 <body>
+<div id="ink-noise" aria-hidden="true"></div>
 <header>
   <h1>AI Tutor - IB DP Math AA (MVP demo)</h1>
   <div class="ids">
