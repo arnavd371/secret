@@ -15,10 +15,14 @@ once per sampled instance.
 from __future__ import annotations
 
 import abc
+import json
 from datetime import datetime, timezone
 from typing import Optional
 
+import aiosqlite
 from pydantic import BaseModel, Field
+
+from app.storage.schema import SqliteBackedStore
 
 
 class ItemResponseRecord(BaseModel):
@@ -66,6 +70,47 @@ class InMemoryResponseLogStore(ResponseLogStore):
         before = len(self._records)
         self._records = [r for r in self._records if r.student_id != student_id]
         return before - len(self._records)
+
+
+class SqliteResponseLogStore(ResponseLogStore, SqliteBackedStore):
+    """File-based persistence for the MVP: response history survives a
+    process restart, so Phase 14's IRT recalibration keeps accumulating
+    sample size instead of resetting to zero every time the server
+    restarts."""
+
+    async def add(self, record: ItemResponseRecord) -> None:
+        await self._ensure_schema()
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.execute(
+                "INSERT INTO response_log (template_id, student_id, data) VALUES (?, ?, ?)",
+                (record.template_id, record.student_id, record.model_dump_json()),
+            )
+            await db.commit()
+
+    async def get_all(self, template_id: str) -> list[ItemResponseRecord]:
+        await self._ensure_schema()
+        async with aiosqlite.connect(self._db_path) as db:
+            async with db.execute(
+                "SELECT data FROM response_log WHERE template_id = ?", (template_id,)
+            ) as cursor:
+                rows = await cursor.fetchall()
+        return [ItemResponseRecord(**json.loads(row[0])) for row in rows]
+
+    async def get_all_for_student(self, student_id: str) -> list[ItemResponseRecord]:
+        await self._ensure_schema()
+        async with aiosqlite.connect(self._db_path) as db:
+            async with db.execute(
+                "SELECT data FROM response_log WHERE student_id = ?", (student_id,)
+            ) as cursor:
+                rows = await cursor.fetchall()
+        return [ItemResponseRecord(**json.loads(row[0])) for row in rows]
+
+    async def erase_student(self, student_id: str) -> int:
+        await self._ensure_schema()
+        async with aiosqlite.connect(self._db_path) as db:
+            cursor = await db.execute("DELETE FROM response_log WHERE student_id = ?", (student_id,))
+            await db.commit()
+            return cursor.rowcount
 
 
 _default_response_log_store: Optional[ResponseLogStore] = None

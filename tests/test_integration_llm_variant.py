@@ -31,10 +31,10 @@ class ScriptedProvider(ProviderClient):
 
     async def generate(self, *, spec, system, user, images=None) -> LLMCallResult:
         if system.startswith("You are a strict, checklist-driven critic"):
-            return LLMCallResult(text='{"verdict": "pass", "violations": []}', model=spec.model, provider=Provider.ANTHROPIC)
+            return LLMCallResult(text='{"verdict": "pass", "violations": []}', model=spec.model, provider=Provider.GROQ)
         self.calls.append({"model": spec.model, "system": system, "user": user})
         text = self._responses.pop(0)
-        return LLMCallResult(text=text, model=spec.model, provider=Provider.ANTHROPIC)
+        return LLMCallResult(text=text, model=spec.model, provider=Provider.GROQ)
 
 
 def _intent_json(topic_hint) -> str:
@@ -56,7 +56,7 @@ async def test_challenge_on_a_known_topic_never_tries_the_llm_variant_path():
     provider = ScriptedProvider(
         [_intent_json("calculus.differentiation.chain_rule"), "Here's a harder one to try."]
     )
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
     await _seed_high_mastery_first_attempt(store, "s1", "problem-1")
 
@@ -95,7 +95,7 @@ async def test_challenge_on_an_unknown_topic_tries_the_llm_variant_first():
             "Here's a harder one to try.",  # tutor generate
         ]
     )
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
     await _seed_high_mastery_first_attempt(store, "s2", "problem-2")
 
@@ -126,7 +126,7 @@ async def test_llm_variant_failure_falls_back_to_the_default_template():
             "Here's a harder one to try.",  # tutor generate, using the template fallback
         ]
     )
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
     await _seed_high_mastery_first_attempt(store, "s3", "problem-3")
 

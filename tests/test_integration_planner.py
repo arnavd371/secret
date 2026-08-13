@@ -30,10 +30,10 @@ class ScriptedProvider(ProviderClient):
 
     async def generate(self, *, spec, system, user, images=None) -> LLMCallResult:
         if system.startswith("You are a strict, checklist-driven critic"):
-            return LLMCallResult(text='{"verdict": "pass", "violations": []}', model=spec.model, provider=Provider.ANTHROPIC)
+            return LLMCallResult(text='{"verdict": "pass", "violations": []}', model=spec.model, provider=Provider.GROQ)
         self.calls.append({"model": spec.model, "system": system, "user": user})
         text = self._responses.pop(0)
-        return LLMCallResult(text=text, model=spec.model, provider=Provider.ANTHROPIC)
+        return LLMCallResult(text=text, model=spec.model, provider=Provider.GROQ)
 
 
 def _check_work_intent_json(topic_hint: str = CHAIN_RULE_TOPIC) -> str:
@@ -53,7 +53,7 @@ def _check_work_intent_json(topic_hint: str = CHAIN_RULE_TOPIC) -> str:
 @pytest.mark.asyncio
 async def test_correct_grading_produces_a_real_execution_plan_without_a_diagnosis_stage():
     provider = ScriptedProvider([_check_work_intent_json()])
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
     memory_store = InMemoryMemoryStore()
     review_store = InMemoryReviewStateStore()
@@ -80,7 +80,7 @@ async def test_correct_grading_produces_a_real_execution_plan_without_a_diagnosi
 @pytest.mark.asyncio
 async def test_incorrect_grading_produces_a_plan_including_the_diagnosis_stage():
     provider = ScriptedProvider([_check_work_intent_json(topic_hint="calculus.differentiation.product_rule")])
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
     memory_store = InMemoryMemoryStore()
     review_store = InMemoryReviewStateStore()
@@ -107,7 +107,7 @@ async def test_all_post_grading_writes_actually_landed_despite_running_concurren
     """The real point of the refactor: concurrent execution must not
     silently drop any of the three independent writes."""
     provider = ScriptedProvider([_check_work_intent_json()])
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
     memory_store = InMemoryMemoryStore()
     review_store = InMemoryReviewStateStore()

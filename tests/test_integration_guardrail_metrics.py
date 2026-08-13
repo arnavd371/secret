@@ -26,9 +26,9 @@ class ScriptedProvider(ProviderClient):
 
     async def generate(self, *, spec, system, user, images=None) -> LLMCallResult:
         if system.startswith("You are a strict, checklist-driven critic"):
-            return LLMCallResult(text='{"verdict": "pass", "violations": []}', model=spec.model, provider=Provider.ANTHROPIC)
+            return LLMCallResult(text='{"verdict": "pass", "violations": []}', model=spec.model, provider=Provider.GROQ)
         text = self._responses.pop(0)
-        return LLMCallResult(text=text, model=spec.model, provider=Provider.ANTHROPIC)
+        return LLMCallResult(text=text, model=spec.model, provider=Provider.GROQ)
 
 
 class _CriticAlwaysFailsProvider(ProviderClient):
@@ -39,7 +39,7 @@ class _CriticAlwaysFailsProvider(ProviderClient):
         if system.startswith("You are a strict, checklist-driven critic"):
             raise ModelUnavailableError("simulated critic outage")
         text = self._responses.pop(0)
-        return LLMCallResult(text=text, model=spec.model, provider=Provider.ANTHROPIC)
+        return LLMCallResult(text=text, model=spec.model, provider=Provider.GROQ)
 
 
 def _concept_explain_intent_json() -> str:
@@ -59,7 +59,7 @@ def _concept_explain_intent_json() -> str:
 @pytest.mark.asyncio
 async def test_a_normal_approved_turn_writes_a_real_non_fallback_record():
     provider = ScriptedProvider([_concept_explain_intent_json(), "The chain rule handles composite functions."])
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     metrics_store = InMemoryGuardrailMetricsStore()
 
     result = await handle_turn(
@@ -82,7 +82,7 @@ async def test_a_normal_approved_turn_writes_a_real_non_fallback_record():
 @pytest.mark.asyncio
 async def test_a_degraded_critic_turn_is_recorded_as_critic_degraded():
     provider = _CriticAlwaysFailsProvider([_concept_explain_intent_json(), "The chain rule handles composite functions."])
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     metrics_store = InMemoryGuardrailMetricsStore()
 
     await handle_turn(
@@ -107,7 +107,7 @@ async def test_default_guardrail_metrics_store_is_used_when_none_is_passed():
     from app.guardrail_metrics.store import get_default_guardrail_metrics_store
 
     provider = ScriptedProvider([_concept_explain_intent_json(), "The chain rule handles composite functions."])
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     before = len(await get_default_guardrail_metrics_store().get_all())
 
     await handle_turn(
@@ -127,7 +127,7 @@ async def test_metrics_recorded_across_multiple_real_turns_aggregate_correctly()
     metrics_store = InMemoryGuardrailMetricsStore()
 
     normal_provider = ScriptedProvider([_concept_explain_intent_json(), "The chain rule handles composite functions."])
-    normal_router = ModelRouter(providers={Provider.ANTHROPIC: normal_provider})
+    normal_router = ModelRouter(providers={Provider.GROQ: normal_provider})
     await handle_turn(
         "can you remind me how the chain rule works?",
         session_id="s4",
@@ -140,7 +140,7 @@ async def test_metrics_recorded_across_multiple_real_turns_aggregate_correctly()
     degraded_provider = _CriticAlwaysFailsProvider(
         [_concept_explain_intent_json(), "The chain rule handles composite functions."]
     )
-    degraded_router = ModelRouter(providers={Provider.ANTHROPIC: degraded_provider})
+    degraded_router = ModelRouter(providers={Provider.GROQ: degraded_provider})
     await handle_turn(
         "can you remind me how the chain rule works?",
         session_id="s5",

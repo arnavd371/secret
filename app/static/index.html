@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AI Tutor (MVP)</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --border: #2a2e38;
+    --text: #e7e9ee;
+    --muted: #8b93a3;
+    --accent: #5b8cff;
+    --student-bubble: #24304a;
+    --tutor-bubble: #1c2028;
+    --badge-bg: #232838;
+    --danger: #ff6b6b;
+    --ok: #4fd18b;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  header .ids { font-size: 12px; color: var(--muted); display: flex; gap: 14px; }
+  header .ids input {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-size: 12px;
+    width: 110px;
+  }
+  #chat {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+    max-width: 760px;
+    width: 100%;
+    margin: 0 auto;
+  }
+  .row { display: flex; margin-bottom: 14px; }
+  .row.student { justify-content: flex-end; }
+  .bubble {
+    max-width: 80%;
+    padding: 10px 14px;
+    border-radius: 12px;
+    line-height: 1.45;
+    font-size: 14.5px;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+  }
+  .row.student .bubble { background: var(--student-bubble); border-bottom-right-radius: 3px; }
+  .row.tutor .bubble { background: var(--tutor-bubble); border: 1px solid var(--border); border-bottom-left-radius: 3px; }
+  .meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .badge {
+    display: inline-block;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: var(--badge-bg);
+    color: var(--muted);
+    border: 1px solid var(--border);
+  }
+  .badge.action { color: var(--accent); border-color: var(--accent); }
+  .badge.mark { color: var(--ok); border-color: var(--ok); }
+  .badge.misconception { color: var(--danger); border-color: var(--danger); }
+  .card {
+    margin-top: 8px;
+    padding: 8px 12px;
+    background: var(--badge-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .citations { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  footer {
+    border-top: 1px solid var(--border);
+    padding: 14px 20px 20px;
+  }
+  #composer {
+    max-width: 760px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  #row-input { display: flex; gap: 8px; align-items: flex-end; }
+  textarea {
+    flex: 1;
+    resize: none;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 14px;
+    font-family: inherit;
+    min-height: 44px;
+    max-height: 160px;
+  }
+  button {
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 10px;
+    padding: 0 18px;
+    height: 44px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  button:disabled { opacity: 0.5; cursor: default; }
+  #tools { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted); }
+  #tools label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  #image-name { color: var(--muted); }
+  #status { font-size: 12px; color: var(--muted); min-height: 16px; }
+  #status.error { color: var(--danger); }
+</style>
+</head>
+<body>
+<header>
+  <h1>AI Tutor - IB DP Math AA (MVP demo)</h1>
+  <div class="ids">
+    <span>student: <input id="student-id" /></span>
+    <span>session: <input id="session-id" /></span>
+  </div>
+</header>
+
+<div id="chat"></div>
+
+<footer>
+  <div id="composer">
+    <div id="tools">
+      <label>
+        <input type="checkbox" id="is-check-work" />
+        this is work to check
+      </label>
+      <label>
+        <input type="file" id="image-input" accept="image/png,image/jpeg" style="display:none" />
+        <span id="attach-btn" style="cursor:pointer; text-decoration: underline;">attach photo</span>
+      </label>
+      <span id="image-name"></span>
+    </div>
+    <textarea id="problem" placeholder="What's the problem? e.g. differentiate x**2 * sin(x)" rows="1" style="display:none"></textarea>
+    <div id="row-input">
+      <textarea id="message" placeholder="Ask a question, request a hint, or paste your working..." rows="1"></textarea>
+      <button id="send">Send</button>
+    </div>
+    <div id="status"></div>
+  </div>
+</footer>
+
+<script>
+const chatEl = document.getElementById("chat");
+const messageEl = document.getElementById("message");
+const sendBtn = document.getElementById("send");
+const statusEl = document.getElementById("status");
+const studentIdEl = document.getElementById("student-id");
+const sessionIdEl = document.getElementById("session-id");
+const isCheckWorkEl = document.getElementById("is-check-work");
+const problemEl = document.getElementById("problem");
+const imageInputEl = document.getElementById("image-input");
+const attachBtnEl = document.getElementById("attach-btn");
+const imageNameEl = document.getElementById("image-name");
+
+isCheckWorkEl.addEventListener("change", () => {
+  problemEl.style.display = isCheckWorkEl.checked ? "block" : "none";
+  messageEl.placeholder = isCheckWorkEl.checked
+    ? "Your working... e.g. u = x**2, v = sin(x), u' = 2x, v' = cos(x), so dy/dx = ..."
+    : "Ask a question, request a hint, or paste your working...";
+  if (isCheckWorkEl.checked) problemEl.focus();
+});
+
+function randomId(prefix) {
+  return prefix + "-" + Math.random().toString(36).slice(2, 10);
+}
+
+studentIdEl.value = localStorage.getItem("tutor_student_id") || randomId("student");
+sessionIdEl.value = localStorage.getItem("tutor_session_id") || randomId("session");
+localStorage.setItem("tutor_student_id", studentIdEl.value);
+localStorage.setItem("tutor_session_id", sessionIdEl.value);
+studentIdEl.addEventListener("change", () => localStorage.setItem("tutor_student_id", studentIdEl.value));
+sessionIdEl.addEventListener("change", () => localStorage.setItem("tutor_session_id", sessionIdEl.value));
+
+attachBtnEl.addEventListener("click", () => imageInputEl.click());
+imageInputEl.addEventListener("change", () => {
+  imageNameEl.textContent = imageInputEl.files[0] ? imageInputEl.files[0].name : "";
+});
+
+messageEl.addEventListener("input", () => {
+  messageEl.style.height = "auto";
+  messageEl.style.height = Math.min(messageEl.scrollHeight, 160) + "px";
+});
+messageEl.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    send();
+  }
+});
+
+function addRow(role, contentBuilder) {
+  const row = document.createElement("div");
+  row.className = "row " + role;
+  const bubble = document.createElement("div");
+  bubble.className = "bubble";
+  row.appendChild(bubble);
+  contentBuilder(bubble);
+  chatEl.appendChild(row);
+  chatEl.scrollTop = chatEl.scrollHeight;
+  return bubble;
+}
+
+function addStudentBubble(text) {
+  addRow("student", (bubble) => { bubble.textContent = text; });
+}
+
+function badge(cls, text) {
+  const span = document.createElement("span");
+  span.className = "badge " + cls;
+  span.textContent = text;
+  return span;
+}
+
+function addTutorBubble(data) {
+  addRow("tutor", (bubble) => {
+    bubble.textContent = data.text;
+
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    if (data.action_type) meta.appendChild(badge("action", data.action_type));
+    if (data.mark_result) {
+      meta.appendChild(badge("mark", data.mark_result.total_awarded + "/" + data.mark_result.total_available + " marks"));
+    }
+    if (data.misconception) meta.appendChild(badge("misconception", "misconception flagged"));
+    if (meta.childNodes.length) bubble.appendChild(meta);
+
+    if (data.generated_item_stem) {
+      const card = document.createElement("div");
+      card.className = "card";
+      card.textContent = data.generated_item_stem;
+      bubble.appendChild(card);
+    }
+
+    if (data.mark_result && data.mark_result.comment) {
+      const card = document.createElement("div");
+      card.className = "card";
+      card.textContent = data.mark_result.comment;
+      bubble.appendChild(card);
+    }
+
+    if (data.misconception) {
+      const card = document.createElement("div");
+      card.className = "card";
+      card.textContent = "Misconception: " + data.misconception.description;
+      bubble.appendChild(card);
+    }
+
+    if (data.citations && data.citations.length) {
+      const cites = document.createElement("div");
+      cites.className = "citations";
+      cites.textContent = "Sources: " + data.citations.join(", ");
+      bubble.appendChild(cites);
+    }
+  });
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.split(",")[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+async function send() {
+  const text = messageEl.value.trim();
+  const problem = problemEl.value.trim();
+  const file = imageInputEl.files[0];
+  const checkingWork = isCheckWorkEl.checked;
+  if (!text && !file) return;
+  if (checkingWork && !problem && !file) {
+    statusEl.textContent = "Add the problem statement above so it can be checked against.";
+    statusEl.className = "error";
+    return;
+  }
+
+  sendBtn.disabled = true;
+  statusEl.textContent = "Thinking...";
+  statusEl.className = "";
+  addStudentBubble(checkingWork && problem ? problem + "\n\n" + (text || "(see attached photo)") : (text || "(photo of my work)"));
+
+  const payload = {
+    // The CAS problem-extractor (app.cas.extraction) needs the actual
+    // problem statement, and only the problem statement, in raw_input to
+    // compute ground truth to grade against - it greedily matches
+    // everything after "differentiate"/"solve"/etc., so appending the
+    // student's own working here would break extraction. student_work
+    // (the separate field) is where the working itself belongs.
+    raw_input: checkingWork && problem ? `can you check my work? ${problem}` : text,
+    session_id: sessionIdEl.value,
+    student_id: studentIdEl.value,
+  };
+
+  if (checkingWork && text) {
+    payload.student_work = text;
+  }
+  if (file) {
+    payload.student_work_image_base64 = await fileToBase64(file);
+  }
+
+  messageEl.value = "";
+  messageEl.style.height = "auto";
+  problemEl.value = "";
+  imageInputEl.value = "";
+  imageNameEl.textContent = "";
+
+  try {
+    const res = await fetch("/turn", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || ("HTTP " + res.status));
+    }
+    const data = await res.json();
+    addTutorBubble(data);
+    statusEl.textContent = "";
+  } catch (err) {
+    statusEl.textContent = "Error: " + err.message + " (is GROQ_API_KEY set on the server?)";
+    statusEl.className = "error";
+  } finally {
+    sendBtn.disabled = false;
+    messageEl.focus();
+  }
+}
+
+sendBtn.addEventListener("click", send);
+
+addTutorBubble({
+  text: "Hi! I'm your IB DP Math AA tutor. Ask me to explain a concept, give you a problem to try, or paste your working and I'll check it. What would you like to work on?",
+});
+</script>
+</body>
+</html>

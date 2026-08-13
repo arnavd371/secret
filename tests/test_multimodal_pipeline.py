@@ -24,7 +24,7 @@ def _png_bytes(width: int = 900, height: int = 700) -> bytes:
 
 
 def _router_with_canned_response(text: str) -> ModelRouter:
-    return ModelRouter(providers={Provider.ANTHROPIC: MockProvider(canned_response=text)})
+    return ModelRouter(providers={Provider.GROQ: MockProvider(canned_response=text)})
 
 
 class _AlwaysFailsProvider:
@@ -72,7 +72,7 @@ async def test_low_confidence_transcription_withholds_student_work():
 @pytest.mark.asyncio
 async def test_intake_rejection_short_circuits_before_any_model_call():
     provider = MockProvider(canned_response="should never be reached")
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     tiny_image = _png_bytes(width=10, height=10)
 
     result = await ingest_image(router, tiny_image)
@@ -96,7 +96,7 @@ async def test_corrupt_bytes_are_rejected_before_preprocessing():
 
 @pytest.mark.asyncio
 async def test_ocr_outage_degrades_gracefully_instead_of_raising():
-    router = ModelRouter(providers={Provider.ANTHROPIC: _AlwaysFailsProvider()})
+    router = ModelRouter(providers={Provider.GROQ: _AlwaysFailsProvider()})
     result = await ingest_image(router, _png_bytes())
 
     assert result.rejected is False

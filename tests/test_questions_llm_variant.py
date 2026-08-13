@@ -14,7 +14,7 @@ from app.questions.llm_variant import generate_llm_variant
 
 
 def _router_with_canned_response(text: str) -> ModelRouter:
-    return ModelRouter(providers={Provider.ANTHROPIC: MockProvider(canned_response=text)})
+    return ModelRouter(providers={Provider.GROQ: MockProvider(canned_response=text)})
 
 
 def _variant_json(**overrides) -> str:
@@ -37,7 +37,7 @@ class _QueuedProvider(ProviderClient):
     async def generate(self, *, spec, system, user, images=None) -> LLMCallResult:
         self.calls.append({"system": system, "user": user})
         text = self._responses.pop(0)
-        return LLMCallResult(text=text, model=spec.model, provider=Provider.ANTHROPIC)
+        return LLMCallResult(text=text, model=spec.model, provider=Provider.GROQ)
 
 
 @pytest.mark.asyncio
@@ -104,7 +104,7 @@ async def test_missing_required_key_is_rejected():
 @pytest.mark.asyncio
 async def test_a_bad_first_attempt_can_be_recovered_by_a_good_second_attempt():
     provider = _QueuedProvider([_variant_json(claimed_answer="999"), _variant_json()])
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     item = await generate_llm_variant("calculus.differentiation", router, max_attempts=2)
 
     assert item is not None
@@ -119,7 +119,7 @@ async def test_model_unavailable_returns_none_instead_of_raising():
         async def generate(self, *, spec, system, user, images=None):
             raise ModelUnavailableError("simulated outage")
 
-    router = ModelRouter(providers={Provider.ANTHROPIC: _AlwaysFailsProvider()})
+    router = ModelRouter(providers={Provider.GROQ: _AlwaysFailsProvider()})
     item = await generate_llm_variant("calculus.differentiation", router)
     assert item is None
 

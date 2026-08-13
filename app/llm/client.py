@@ -106,6 +106,71 @@ class AnthropicProvider(ProviderClient):
             raise ModelUnavailableError(f"Anthropic call failed: {exc}") from exc
 
 
+class GroqProvider(ProviderClient):
+    """Groq's chat completions API is OpenAI-compatible, so this talks to
+    it directly over `httpx` rather than pulling in a dedicated SDK — one
+    fewer dependency, and the request/response shape is simple enough
+    that a thin wrapper is the honest amount of code for it, matching
+    AnthropicProvider's own directness above.
+
+    `client` is injectable (defaults to a lazily-created real
+    `httpx.AsyncClient`) purely so tests can supply an `httpx.MockTransport`
+    instead of hitting the network — the same dependency-injection seam
+    AnthropicProvider gets for free from the `anthropic` SDK's own client
+    object.
+    """
+
+    _BASE_URL = "https://api.groq.com/openai/v1/chat/completions"
+
+    def __init__(self, api_key: Optional[str] = None, client: Optional[Any] = None) -> None:
+        self._api_key = api_key or os.environ.get("GROQ_API_KEY")
+        self._client = client
+
+    def _content_blocks(self, user: str, images: Optional[list[ImageInput]]) -> Any:
+        if not images:
+            return user
+        blocks: list[dict[str, Any]] = [{"type": "text", "text": user}]
+        for image in images:
+            data_uri = f"data:{image.media_type};base64,{base64.b64encode(image.data).decode('ascii')}"
+            blocks.append({"type": "image_url", "image_url": {"url": data_uri}})
+        return blocks
+
+    async def generate(
+        self, *, spec: ModelSpec, system: str, user: str, images: Optional[list[ImageInput]] = None
+    ) -> LLMCallResult:
+        if not self._api_key:
+            raise ModelUnavailableError("GROQ_API_KEY is not configured; cannot call the Groq provider.")
+
+        try:
+            import httpx
+        except ImportError as exc:  # pragma: no cover - exercised only without the dep installed
+            raise ModelUnavailableError("httpx is not installed") from exc
+
+        payload = {
+            "model": spec.model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": self._content_blocks(user, images)},
+            ],
+            "max_tokens": spec.max_tokens,
+            "temperature": spec.temperature,
+        }
+        headers = {"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"}
+
+        try:
+            client = self._client or httpx.AsyncClient()
+            response = await client.post(self._BASE_URL, json=payload, headers=headers, timeout=spec.timeout_seconds)
+            response.raise_for_status()
+            body = response.json()
+            text = body["choices"][0]["message"]["content"] or ""
+            return LLMCallResult(text=text, model=spec.model, provider=Provider.GROQ)
+        except Exception as exc:  # noqa: BLE001 - any provider failure becomes ModelUnavailableError
+            raise ModelUnavailableError(f"Groq call failed: {exc}") from exc
+        finally:
+            if self._client is None:
+                await client.aclose()
+
+
 class MockProvider(ProviderClient):
     """Used by tests and offline dev. Responses are supplied by the caller
     up front rather than generated, so tests are deterministic."""
@@ -124,7 +189,14 @@ class MockProvider(ProviderClient):
 class ModelRouter:
     def __init__(self, providers: Optional[dict[Provider, ProviderClient]] = None) -> None:
         self._providers: dict[Provider, ProviderClient] = providers or {
+            # Both are always registered so CAPABILITY_MODEL_MAP can name
+            # either provider per capability without the caller having to
+            # know which key is active — each provider client itself
+            # raises ModelUnavailableError (not an import-time crash) if
+            # its own API key isn't set, exactly like every other
+            # provider failure this system already falls back around.
             Provider.ANTHROPIC: AnthropicProvider(),
+            Provider.GROQ: GroqProvider(),
         }
 
     async def call(

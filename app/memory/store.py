@@ -9,9 +9,13 @@ the schema in spec §4.2 without changing any caller.
 from __future__ import annotations
 
 import abc
+import json
 from typing import Optional
 
+import aiosqlite
+
 from app.memory.models import MisconceptionRegistryEntry, SubtopicMastery
+from app.storage.schema import SqliteBackedStore
 
 
 class MemoryStore(abc.ABC):
@@ -70,6 +74,67 @@ class InMemoryMemoryStore(MemoryStore):
         for k in misconception_keys:
             del self._misconceptions[k]
         return len(mastery_keys) + len(misconception_keys)
+
+
+class SqliteMemoryStore(MemoryStore, SqliteBackedStore):
+    """File-based persistence for the MVP: mastery and misconception
+    records survive a process restart, in two tables mirroring the two
+    dicts InMemoryMemoryStore keeps in memory."""
+
+    async def get_mastery(self, student_id: str, subtopic_id: str) -> Optional[SubtopicMastery]:
+        await self._ensure_schema()
+        async with aiosqlite.connect(self._db_path) as db:
+            async with db.execute(
+                "SELECT data FROM mastery WHERE student_id = ? AND subtopic_id = ?", (student_id, subtopic_id)
+            ) as cursor:
+                row = await cursor.fetchone()
+        return SubtopicMastery(**json.loads(row[0])) if row else None
+
+    async def save_mastery(self, mastery: SubtopicMastery) -> None:
+        await self._ensure_schema()
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.execute(
+                "INSERT INTO mastery (student_id, subtopic_id, data) VALUES (?, ?, ?) "
+                "ON CONFLICT(student_id, subtopic_id) DO UPDATE SET data = excluded.data",
+                (mastery.student_id, mastery.subtopic_id, mastery.model_dump_json()),
+            )
+            await db.commit()
+
+    async def get_all_mastery(self, student_id: str) -> list[SubtopicMastery]:
+        await self._ensure_schema()
+        async with aiosqlite.connect(self._db_path) as db:
+            async with db.execute("SELECT data FROM mastery WHERE student_id = ?", (student_id,)) as cursor:
+                rows = await cursor.fetchall()
+        return [SubtopicMastery(**json.loads(row[0])) for row in rows]
+
+    async def get_misconceptions(self, student_id: str) -> list[MisconceptionRegistryEntry]:
+        await self._ensure_schema()
+        async with aiosqlite.connect(self._db_path) as db:
+            async with db.execute(
+                "SELECT data FROM misconceptions WHERE student_id = ?", (student_id,)
+            ) as cursor:
+                rows = await cursor.fetchall()
+        return [MisconceptionRegistryEntry(**json.loads(row[0])) for row in rows]
+
+    async def save_misconception(self, entry: MisconceptionRegistryEntry) -> None:
+        await self._ensure_schema()
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.execute(
+                "INSERT INTO misconceptions (student_id, misconception_id, data) VALUES (?, ?, ?) "
+                "ON CONFLICT(student_id, misconception_id) DO UPDATE SET data = excluded.data",
+                (entry.student_id, entry.misconception_id, entry.model_dump_json()),
+            )
+            await db.commit()
+
+    async def erase_student(self, student_id: str) -> int:
+        await self._ensure_schema()
+        async with aiosqlite.connect(self._db_path) as db:
+            mastery_cursor = await db.execute("DELETE FROM mastery WHERE student_id = ?", (student_id,))
+            misconception_cursor = await db.execute(
+                "DELETE FROM misconceptions WHERE student_id = ?", (student_id,)
+            )
+            await db.commit()
+            return mastery_cursor.rowcount + misconception_cursor.rowcount
 
 
 _default_memory_store: Optional[MemoryStore] = None

@@ -20,7 +20,7 @@ from app.session.state import InMemorySessionStateStore, ProblemSessionState
 
 class ScriptedProvider(ProviderClient):
     """Phase 6's Verifier/Critic makes an additional, independent model
-    call per turn on the same shared Provider.ANTHROPIC queue. These
+    call per turn on the same shared Provider.GROQ queue. These
     tests aren't exercising critic behavior, so a critic-shaped system
     prompt is auto-passed without consuming a slot in the scripted queue."""
 
@@ -30,10 +30,10 @@ class ScriptedProvider(ProviderClient):
 
     async def generate(self, *, spec, system, user, images=None) -> LLMCallResult:
         if system.startswith("You are a strict, checklist-driven critic"):
-            return LLMCallResult(text='{"verdict": "pass", "violations": []}', model=spec.model, provider=Provider.ANTHROPIC)
+            return LLMCallResult(text='{"verdict": "pass", "violations": []}', model=spec.model, provider=Provider.GROQ)
         self.calls.append({"model": spec.model, "system": system, "user": user})
         text = self._responses.pop(0)
-        return LLMCallResult(text=text, model=spec.model, provider=Provider.ANTHROPIC)
+        return LLMCallResult(text=text, model=spec.model, provider=Provider.GROQ)
 
 
 def _intent_json(topic_hint: str | None = None) -> str:
@@ -64,7 +64,7 @@ async def test_high_mastery_turn_gets_a_real_verified_extension_item():
             "Great work! Here's a tougher one for you to attempt on your own.",
         ]
     )
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
     await _seed_high_mastery_first_attempt(store, "sess-challenge-1", "problem-1")
 
@@ -109,7 +109,7 @@ async def test_challenge_response_never_leaks_the_generated_items_answer(monkeyp
 
     leaking_draft = f"Try this: {fixed_item.rendered_stem} The answer is {fixed_item.correct_answer.value}."
     provider = ScriptedProvider([_intent_json(topic_hint="calculus.differentiation.chain_rule"), leaking_draft])
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
     await _seed_high_mastery_first_attempt(store, "sess-challenge-2", "problem-1")
 

@@ -10,9 +10,13 @@ a historical event and only ever gets added to).
 from __future__ import annotations
 
 import abc
+import json
 from typing import Optional
 
+import aiosqlite
+
 from app.ia_supervisor.models import DisclosureEntry
+from app.storage.schema import SqliteBackedStore
 
 
 class DisclosureStore(abc.ABC):
@@ -51,6 +55,44 @@ class InMemoryDisclosureStore(DisclosureStore):
     async def get_all_for_student(self, student_id: str) -> list[DisclosureEntry]:
         matching = [e for e in self._entries if e.student_id == student_id]
         return sorted(matching, key=lambda e: e.timestamp)
+
+
+class SqliteDisclosureStore(DisclosureStore, SqliteBackedStore):
+    """File-based persistence for the MVP - same deliberate omission as
+    the ABC above: no erase_student() method exists here either, for the
+    same GDPR Article 17(3) reasoning (app.privacy.gdpr's docstring).
+    Append-only in truth as well as in interface: every call is an
+    INSERT, never an UPDATE or DELETE."""
+
+    async def add(self, entry: DisclosureEntry) -> None:
+        await self._ensure_schema()
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.execute(
+                "INSERT INTO disclosure_log (student_id, project_id, data) VALUES (?, ?, ?)",
+                (entry.student_id, entry.project_id, entry.model_dump_json()),
+            )
+            await db.commit()
+
+    async def get_all(self, student_id: str, project_id: str) -> list[DisclosureEntry]:
+        await self._ensure_schema()
+        async with aiosqlite.connect(self._db_path) as db:
+            async with db.execute(
+                "SELECT data FROM disclosure_log WHERE student_id = ? AND project_id = ?",
+                (student_id, project_id),
+            ) as cursor:
+                rows = await cursor.fetchall()
+        entries = [DisclosureEntry(**json.loads(row[0])) for row in rows]
+        return sorted(entries, key=lambda e: e.timestamp)
+
+    async def get_all_for_student(self, student_id: str) -> list[DisclosureEntry]:
+        await self._ensure_schema()
+        async with aiosqlite.connect(self._db_path) as db:
+            async with db.execute(
+                "SELECT data FROM disclosure_log WHERE student_id = ?", (student_id,)
+            ) as cursor:
+                rows = await cursor.fetchall()
+        entries = [DisclosureEntry(**json.loads(row[0])) for row in rows]
+        return sorted(entries, key=lambda e: e.timestamp)
 
 
 _default_disclosure_store: Optional[DisclosureStore] = None

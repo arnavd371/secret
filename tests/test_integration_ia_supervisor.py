@@ -29,10 +29,10 @@ class ScriptedProvider(ProviderClient):
 
     async def generate(self, *, spec, system, user, images=None) -> LLMCallResult:
         if system.startswith("You are a strict, checklist-driven critic"):
-            return LLMCallResult(text='{"verdict": "pass", "violations": []}', model=spec.model, provider=Provider.ANTHROPIC)
+            return LLMCallResult(text='{"verdict": "pass", "violations": []}', model=spec.model, provider=Provider.GROQ)
         self.calls.append({"model": spec.model, "system": system, "user": user})
         text = self._responses.pop(0)
-        return LLMCallResult(text=text, model=spec.model, provider=Provider.ANTHROPIC)
+        return LLMCallResult(text=text, model=spec.model, provider=Provider.GROQ)
 
 
 def _intent_json() -> str:
@@ -54,7 +54,7 @@ async def test_legitimate_coaching_request_is_allowed_and_logged():
     provider = ScriptedProvider(
         [_intent_json(), "What subject area interests you, and what's a specific question within it?"]
     )
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
     ia_project_store = InMemoryIAProjectStateStore()
     ia_disclosure_store = InMemoryDisclosureStore()
@@ -83,7 +83,7 @@ async def test_legitimate_coaching_request_is_allowed_and_logged():
 @pytest.mark.asyncio
 async def test_ghostwriting_request_is_refused_without_calling_the_tutor():
     provider = ScriptedProvider([_intent_json(), "SHOULD NEVER BE CONSUMED"])
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
     ia_project_store = InMemoryIAProjectStateStore()
     ia_disclosure_store = InMemoryDisclosureStore()
@@ -116,7 +116,7 @@ async def test_completed_project_closes_further_coaching():
             _intent_json(),  # turn 3: still REFUSE (terminal), no tutor draft consumed
         ]
     )
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
     ia_project_store = InMemoryIAProjectStateStore()
     ia_disclosure_store = InMemoryDisclosureStore()
@@ -175,7 +175,7 @@ async def test_disclosure_statement_reflects_the_real_logged_history():
             _intent_json(),
         ]
     )
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
     ia_project_store = InMemoryIAProjectStateStore()
     ia_disclosure_store = InMemoryDisclosureStore()

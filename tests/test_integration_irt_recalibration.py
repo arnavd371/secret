@@ -29,10 +29,10 @@ class ScriptedProvider(ProviderClient):
 
     async def generate(self, *, spec, system, user, images=None) -> LLMCallResult:
         if system.startswith("You are a strict, checklist-driven critic"):
-            return LLMCallResult(text='{"verdict": "pass", "violations": []}', model=spec.model, provider=Provider.ANTHROPIC)
+            return LLMCallResult(text='{"verdict": "pass", "violations": []}', model=spec.model, provider=Provider.GROQ)
         self.calls.append({"model": spec.model, "system": system, "user": user})
         text = self._responses.pop(0)
-        return LLMCallResult(text=text, model=spec.model, provider=Provider.ANTHROPIC)
+        return LLMCallResult(text=text, model=spec.model, provider=Provider.GROQ)
 
 
 def _check_work_intent_json() -> str:
@@ -52,7 +52,7 @@ def _check_work_intent_json() -> str:
 @pytest.mark.asyncio
 async def test_graded_response_tagged_with_a_template_id_is_logged():
     provider = ScriptedProvider([_check_work_intent_json()])
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
     response_log_store = InMemoryResponseLogStore()
 
@@ -76,7 +76,7 @@ async def test_graded_response_tagged_with_a_template_id_is_logged():
 @pytest.mark.asyncio
 async def test_no_response_logged_without_responding_to_template_id():
     provider = ScriptedProvider([_check_work_intent_json()])
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
     response_log_store = InMemoryResponseLogStore()
 
@@ -100,7 +100,7 @@ async def test_enough_real_history_recalibrates_a_later_challenge_item():
         + [json.dumps({"intent": "solve_request", "confidence": 0.9, "subject": "math_aa", "topic_hint": CHAIN_RULE_TOPIC, "assessment_mode_guess": "practice", "requires_multimodal_parse": False, "language": "en"})]
         + ["Great work! Here's a tougher one for you."]
     )
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
     response_log_store = InMemoryResponseLogStore()
 

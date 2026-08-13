@@ -18,7 +18,7 @@ from app.session.state import InMemorySessionStateStore
 
 class ScriptedProvider(ProviderClient):
     """Phase 6's Verifier/Critic makes an additional, independent model
-    call per turn on the same shared Provider.ANTHROPIC queue. These
+    call per turn on the same shared Provider.GROQ queue. These
     tests aren't exercising critic behavior, so a critic-shaped system
     prompt is auto-passed without consuming a slot in the scripted queue."""
 
@@ -28,10 +28,10 @@ class ScriptedProvider(ProviderClient):
 
     async def generate(self, *, spec, system, user, images=None) -> LLMCallResult:
         if system.startswith("You are a strict, checklist-driven critic"):
-            return LLMCallResult(text='{"verdict": "pass", "violations": []}', model=spec.model, provider=Provider.ANTHROPIC)
+            return LLMCallResult(text='{"verdict": "pass", "violations": []}', model=spec.model, provider=Provider.GROQ)
         self.calls.append({"model": spec.model, "system": system, "user": user})
         text = self._responses.pop(0)
-        return LLMCallResult(text=text, model=spec.model, provider=Provider.ANTHROPIC)
+        return LLMCallResult(text=text, model=spec.model, provider=Provider.GROQ)
 
 
 def _check_work_intent_json() -> str:
@@ -56,7 +56,7 @@ async def test_check_work_with_student_work_bypasses_tutor_llm_and_grades_for_re
             "THIS SHOULD NEVER BE CONSUMED — grading bypasses the Tutor LLM call entirely",
         ]
     )
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
 
     work = "u = x**2, v = sin(x)\nu_prime = 2*x\nv_prime = cos(x)\ntherefore dy/dx = 2*x*sin(x) + x**2*cos(x)"
@@ -90,7 +90,7 @@ async def test_check_work_without_student_work_falls_back_to_tutor_generated_exp
             "Let's look at where your working diverges from the correct method.",
         ]
     )
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
 
     result = await handle_turn(
@@ -109,7 +109,7 @@ async def test_check_work_without_student_work_falls_back_to_tutor_generated_exp
 @pytest.mark.asyncio
 async def test_check_work_grades_incorrect_submission_and_localizes_error():
     provider = ScriptedProvider([_check_work_intent_json(), "unused"])
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
 
     work = "u = x**2, v = sin(x)\ntherefore dy/dx = 2*x*cos(x)"  # wrong final answer
@@ -137,7 +137,7 @@ async def test_check_work_falls_back_when_no_math_task_is_extractable():
     provider = ScriptedProvider(
         [_check_work_intent_json(), "Let's talk through what you're working on."]
     )
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
 
     result = await handle_turn(

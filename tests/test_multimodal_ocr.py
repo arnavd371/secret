@@ -12,7 +12,7 @@ from app.multimodal.ocr import transcribe_image
 
 
 def _router_with_canned_response(text: str) -> ModelRouter:
-    return ModelRouter(providers={Provider.ANTHROPIC: MockProvider(canned_response=text)})
+    return ModelRouter(providers={Provider.GROQ: MockProvider(canned_response=text)})
 
 
 @pytest.mark.asyncio
@@ -26,7 +26,7 @@ async def test_transcribe_image_returns_model_text():
 @pytest.mark.asyncio
 async def test_transcribe_image_passes_the_image_bytes_through_to_the_provider():
     provider = MockProvider(canned_response="x = 2")
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     await transcribe_image(router, b"specific-image-bytes")
     assert len(provider.calls) == 1
     images = provider.calls[0]["images"]
@@ -41,6 +41,6 @@ class _AlwaysFailsProvider:
 
 @pytest.mark.asyncio
 async def test_transcribe_image_propagates_model_unavailable_error():
-    router = ModelRouter(providers={Provider.ANTHROPIC: _AlwaysFailsProvider()})
+    router = ModelRouter(providers={Provider.GROQ: _AlwaysFailsProvider()})
     with pytest.raises(ModelUnavailableError):
         await transcribe_image(router, b"fake-png-bytes")

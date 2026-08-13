@@ -15,7 +15,7 @@ from app.verifier.models import CritiqueVerdict
 
 
 def _router_with_canned_response(text: str) -> ModelRouter:
-    return ModelRouter(providers={Provider.ANTHROPIC: MockProvider(canned_response=text)})
+    return ModelRouter(providers={Provider.GROQ: MockProvider(canned_response=text)})
 
 
 class _AlwaysFailsProvider:
@@ -60,7 +60,7 @@ async def test_critique_draft_degrades_to_static_check_on_unparseable_response()
 
 @pytest.mark.asyncio
 async def test_critique_draft_degrades_to_static_check_on_provider_outage():
-    router = ModelRouter(providers={Provider.ANTHROPIC: _AlwaysFailsProvider()})
+    router = ModelRouter(providers={Provider.GROQ: _AlwaysFailsProvider()})
     action = Action(action_type=ActionType.EXPLAIN, move="direct_explanation", reason="test")
     result = await critique_draft("a clean draft", action, router)
     assert result.critic_degraded is True

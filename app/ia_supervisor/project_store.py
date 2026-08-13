@@ -8,9 +8,13 @@ implementation without changing any caller.
 from __future__ import annotations
 
 import abc
+import json
 from typing import Optional
 
+import aiosqlite
+
 from app.ia_supervisor.models import IAProjectState
+from app.storage.schema import SqliteBackedStore
 
 
 class IAProjectStateStore(abc.ABC):
@@ -48,6 +52,47 @@ class InMemoryIAProjectStateStore(IAProjectStateStore):
         for k in keys:
             del self._states[k]
         return len(keys)
+
+
+class SqliteIAProjectStateStore(IAProjectStateStore, SqliteBackedStore):
+    """File-based persistence for the MVP: a project's stage survives a
+    process restart instead of resetting to topic_selection."""
+
+    async def get(self, student_id: str, project_id: str) -> Optional[IAProjectState]:
+        await self._ensure_schema()
+        async with aiosqlite.connect(self._db_path) as db:
+            async with db.execute(
+                "SELECT data FROM ia_project_state WHERE student_id = ? AND project_id = ?",
+                (student_id, project_id),
+            ) as cursor:
+                row = await cursor.fetchone()
+        return IAProjectState(**json.loads(row[0])) if row else None
+
+    async def save(self, state: IAProjectState) -> None:
+        await self._ensure_schema()
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.execute(
+                "INSERT INTO ia_project_state (student_id, project_id, data) VALUES (?, ?, ?) "
+                "ON CONFLICT(student_id, project_id) DO UPDATE SET data = excluded.data",
+                (state.student_id, state.project_id, state.model_dump_json()),
+            )
+            await db.commit()
+
+    async def get_all_for_student(self, student_id: str) -> list[IAProjectState]:
+        await self._ensure_schema()
+        async with aiosqlite.connect(self._db_path) as db:
+            async with db.execute(
+                "SELECT data FROM ia_project_state WHERE student_id = ?", (student_id,)
+            ) as cursor:
+                rows = await cursor.fetchall()
+        return [IAProjectState(**json.loads(row[0])) for row in rows]
+
+    async def erase_student(self, student_id: str) -> int:
+        await self._ensure_schema()
+        async with aiosqlite.connect(self._db_path) as db:
+            cursor = await db.execute("DELETE FROM ia_project_state WHERE student_id = ?", (student_id,))
+            await db.commit()
+            return cursor.rowcount
 
 
 _default_ia_project_store: Optional[IAProjectStateStore] = None

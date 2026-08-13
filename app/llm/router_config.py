@@ -24,6 +24,17 @@ open-ended creative task, not a classification one; every claim it makes
 is independently CAS-verified before ever being served (app/questions/
 llm_variant.py), so this capability's own output is never trusted on its
 own.
+
+MVP pass: every capability below now names a free-tier Groq model
+(app/llm/client.GroqProvider) instead of Anthropic, so the whole system
+runs end to end without a paid API key — set GROQ_API_KEY (a free key
+from console.groq.com) and go. Swapping any single capability back to
+Anthropic (or to any other provider registered on ModelRouter) is still
+exactly the one-line change this file's own docstring promises: change
+that entry's `provider=` and `model=`, nothing else in the codebase
+needs to know. `math_ocr` specifically needs a vision-capable model,
+which is why it's pinned to Llama 4 Scout rather than the smaller
+text-only Llama 3.1 models used for the fast/cheap capabilities.
 """
 
 from __future__ import annotations
@@ -34,6 +45,7 @@ from enum import Enum
 
 class Provider(str, Enum):
     ANTHROPIC = "anthropic"
+    GROQ = "groq"
     MOCK = "mock"  # used by tests / offline dev; never selected in prod config
 
 
@@ -49,43 +61,45 @@ class ModelSpec:
 # capability -> ModelSpec. This is the ONLY place model identifiers appear.
 CAPABILITY_MODEL_MAP: dict[str, ModelSpec] = {
     "intent_classify": ModelSpec(
-        provider=Provider.ANTHROPIC,
-        model="claude-haiku-4-5-20251001",
+        provider=Provider.GROQ,
+        model="llama-3.1-8b-instant",
         max_tokens=256,
         temperature=0.0,
         timeout_seconds=4.0,
     ),
     "tutor_generate": ModelSpec(
-        provider=Provider.ANTHROPIC,
-        model="claude-sonnet-5",
+        provider=Provider.GROQ,
+        model="llama-3.3-70b-versatile",
         max_tokens=1024,
         temperature=0.4,
         timeout_seconds=8.0,
     ),
     "critic_check": ModelSpec(
-        provider=Provider.ANTHROPIC,
-        model="claude-haiku-4-5-20251001",
+        provider=Provider.GROQ,
+        model="llama-3.1-8b-instant",
         max_tokens=256,
         temperature=0.0,
         timeout_seconds=3.0,
     ),
     "math_ocr": ModelSpec(
-        provider=Provider.ANTHROPIC,
-        model="claude-sonnet-5",
+        # The one capability that needs a vision-capable model, not just
+        # a fast/cheap text one - Llama 4 Scout, not Llama 3.1.
+        provider=Provider.GROQ,
+        model="meta-llama/llama-4-scout-17b-16e-instruct",
         max_tokens=1024,
         temperature=0.0,
         timeout_seconds=12.0,
     ),
     "misconception_diagnose": ModelSpec(
-        provider=Provider.ANTHROPIC,
-        model="claude-haiku-4-5-20251001",
+        provider=Provider.GROQ,
+        model="llama-3.1-8b-instant",
         max_tokens=256,
         temperature=0.0,
         timeout_seconds=4.0,
     ),
     "item_variant_author": ModelSpec(
-        provider=Provider.ANTHROPIC,
-        model="claude-sonnet-5",
+        provider=Provider.GROQ,
+        model="llama-3.3-70b-versatile",
         max_tokens=512,
         temperature=0.6,
         timeout_seconds=8.0,

@@ -27,7 +27,7 @@ def _cas_result(operation: CASOperation, result_exact: str) -> CASResult:
 
 @pytest.mark.asyncio
 async def test_pattern_match_short_circuits_before_any_model_call():
-    router = ModelRouter(providers={Provider.ANTHROPIC: _RaisesIfCalledProvider()})
+    router = ModelRouter(providers={Provider.GROQ: _RaisesIfCalledProvider()})
     task = MathTask(operation=CASOperation.DIFFERENTIATE, expression="(2*x + 1)**5", variable="x")
     cas_result = _cas_result(CASOperation.DIFFERENTIATE, "10*(2*x + 1)**4")
 
@@ -43,7 +43,7 @@ async def test_pattern_match_short_circuits_before_any_model_call():
 @pytest.mark.asyncio
 async def test_falls_back_to_model_when_no_pattern_matches():
     canned = json.dumps({"misconception_id": "MISC-CALC-010", "confidence": 0.75, "evidence": "matches f'g' shape"})
-    router = ModelRouter(providers={Provider.ANTHROPIC: MockProvider(canned_response=canned)})
+    router = ModelRouter(providers={Provider.GROQ: MockProvider(canned_response=canned)})
     task = MathTask(operation=CASOperation.DIFFERENTIATE, expression="x**2 * sin(x)", variable="x")
     cas_result = _cas_result(CASOperation.DIFFERENTIATE, "2*x*sin(x) + x**2*cos(x)")
 
@@ -55,7 +55,7 @@ async def test_falls_back_to_model_when_no_pattern_matches():
 
 @pytest.mark.asyncio
 async def test_unverifiable_cas_result_skips_diagnosis_entirely():
-    router = ModelRouter(providers={Provider.ANTHROPIC: _RaisesIfCalledProvider()})
+    router = ModelRouter(providers={Provider.GROQ: _RaisesIfCalledProvider()})
     task = MathTask(operation=CASOperation.DIFFERENTIATE, expression="garbage(((", variable="x")
     cas_result = CASResult(status=CASStatus.UNVERIFIABLE, operation=CASOperation.DIFFERENTIATE, input_latex="")
 
@@ -67,7 +67,7 @@ async def test_unverifiable_cas_result_skips_diagnosis_entirely():
 
 @pytest.mark.asyncio
 async def test_no_final_answer_in_submission_skips_diagnosis_without_calling_model():
-    router = ModelRouter(providers={Provider.ANTHROPIC: _RaisesIfCalledProvider()})
+    router = ModelRouter(providers={Provider.GROQ: _RaisesIfCalledProvider()})
     task = MathTask(operation=CASOperation.DIFFERENTIATE, expression="x**2 * sin(x)", variable="x")
     cas_result = _cas_result(CASOperation.DIFFERENTIATE, "2*x*sin(x) + x**2*cos(x)")
 

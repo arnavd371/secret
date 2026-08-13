@@ -26,10 +26,10 @@ class ScriptedProvider(ProviderClient):
 
     async def generate(self, *, spec, system, user, images=None) -> LLMCallResult:
         if system.startswith("You are a strict, checklist-driven critic"):
-            return LLMCallResult(text='{"verdict": "pass", "violations": []}', model=spec.model, provider=Provider.ANTHROPIC)
+            return LLMCallResult(text='{"verdict": "pass", "violations": []}', model=spec.model, provider=Provider.GROQ)
         self.calls.append({"model": spec.model, "system": system, "user": user})
         text = self._responses.pop(0)
-        return LLMCallResult(text=text, model=spec.model, provider=Provider.ANTHROPIC)
+        return LLMCallResult(text=text, model=spec.model, provider=Provider.GROQ)
 
 
 def _check_work_intent_json(topic_hint: str = "calculus.differentiation.product_rule") -> str:
@@ -49,7 +49,7 @@ def _check_work_intent_json(topic_hint: str = "calculus.differentiation.product_
 @pytest.mark.asyncio
 async def test_pattern_matched_misconception_is_written_and_surfaces_next_turn():
     provider = ScriptedProvider([_check_work_intent_json(), _check_work_intent_json()])
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
     memory_store = InMemoryMemoryStore()
 
@@ -97,7 +97,7 @@ async def test_pattern_matched_misconception_is_written_and_surfaces_next_turn()
 @pytest.mark.asyncio
 async def test_correct_submission_never_runs_diagnosis():
     provider = ScriptedProvider([_check_work_intent_json()])
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
     memory_store = InMemoryMemoryStore()
 
@@ -123,7 +123,7 @@ async def test_unmatched_wrong_answer_falls_back_to_model_and_is_written_when_co
         {"misconception_id": "MISC-CALC-010", "confidence": 0.9, "evidence": "resembles f'g' with a sign slip"}
     )
     provider = ScriptedProvider([_check_work_intent_json(), diagnosis_response])
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
     memory_store = InMemoryMemoryStore()
 
@@ -148,7 +148,7 @@ async def test_unmatched_wrong_answer_falls_back_to_model_and_is_written_when_co
 @pytest.mark.asyncio
 async def test_repeat_diagnosis_increments_occurrences_not_duplicate_entries():
     provider = ScriptedProvider([_check_work_intent_json(), _check_work_intent_json()])
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
     memory_store = InMemoryMemoryStore()
 

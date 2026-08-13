@@ -32,10 +32,10 @@ class ScriptedProvider(ProviderClient):
 
     async def generate(self, *, spec, system, user, images=None) -> LLMCallResult:
         if system.startswith("You are a strict, checklist-driven critic"):
-            return LLMCallResult(text='{"verdict": "pass", "violations": []}', model=spec.model, provider=Provider.ANTHROPIC)
+            return LLMCallResult(text='{"verdict": "pass", "violations": []}', model=spec.model, provider=Provider.GROQ)
         self.calls.append({"model": spec.model, "system": system, "user": user})
         text = self._responses.pop(0)
-        return LLMCallResult(text=text, model=spec.model, provider=Provider.ANTHROPIC)
+        return LLMCallResult(text=text, model=spec.model, provider=Provider.GROQ)
 
 
 def _intent_json(intent: str, topic_hint=None) -> str:
@@ -57,7 +57,7 @@ async def test_exam_prep_with_a_due_review_binds_a_real_generated_item():
     provider = ScriptedProvider(
         [_intent_json("exam_prep"), "This one's due for review: Find the derivative. Try it from memory."]
     )
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
     memory_store = InMemoryMemoryStore()
     review_store = InMemoryReviewStateStore()
@@ -89,7 +89,7 @@ async def test_exam_prep_with_nothing_due_falls_back_to_explain():
     provider = ScriptedProvider(
         [_intent_json("exam_prep"), "Sure, what would you like to go over?"]
     )
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
     memory_store = InMemoryMemoryStore()
     review_store = InMemoryReviewStateStore()  # empty: nothing has ever been reviewed
@@ -113,7 +113,7 @@ async def test_exam_prep_with_nothing_due_falls_back_to_explain():
 @pytest.mark.asyncio
 async def test_graded_check_work_updates_real_fsrs_state():
     provider = ScriptedProvider([_intent_json("check_work", topic_hint=CHAIN_RULE_TOPIC)])
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
     memory_store = InMemoryMemoryStore()
     review_store = InMemoryReviewStateStore()
@@ -146,7 +146,7 @@ async def test_incorrect_grading_schedules_a_sooner_review_than_a_correct_one():
             _intent_json("check_work", topic_hint="calculus.differentiation.product_rule"),
         ]
     )
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
     memory_store = InMemoryMemoryStore()
     review_store = InMemoryReviewStateStore()

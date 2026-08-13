@@ -18,7 +18,7 @@ from app.questions.generator import generate_item
 
 
 def _router_with_canned_response(text: str) -> ModelRouter:
-    return ModelRouter(providers={Provider.ANTHROPIC: MockProvider(canned_response=text)})
+    return ModelRouter(providers={Provider.GROQ: MockProvider(canned_response=text)})
 
 
 class _QueuedProvider(ProviderClient):
@@ -32,11 +32,11 @@ class _QueuedProvider(ProviderClient):
 
     async def generate(self, *, spec, system, user, images=None) -> LLMCallResult:
         text = self._responses.pop(0)
-        return LLMCallResult(text=text, model=spec.model, provider=Provider.ANTHROPIC)
+        return LLMCallResult(text=text, model=spec.model, provider=Provider.GROQ)
 
 
 def _router_with_queued_responses(responses: list[str]) -> ModelRouter:
-    return ModelRouter(providers={Provider.ANTHROPIC: _QueuedProvider(responses)})
+    return ModelRouter(providers={Provider.GROQ: _QueuedProvider(responses)})
 
 
 class _AlwaysFailsProvider:
@@ -98,7 +98,7 @@ async def test_generate_allows_final_answer_on_explain_action():
 
 @pytest.mark.asyncio
 async def test_generate_falls_back_when_provider_unavailable():
-    router = ModelRouter(providers={Provider.ANTHROPIC: _AlwaysFailsProvider()})
+    router = ModelRouter(providers={Provider.GROQ: _AlwaysFailsProvider()})
     action = Action(action_type=ActionType.HINT, level=3, reason="test")
 
     response = await tutor_agent.generate(action, "help", router)
@@ -316,7 +316,7 @@ async def test_challenge_draft_leaking_the_items_answer_is_blocked():
 @pytest.mark.asyncio
 async def test_challenge_fallback_uses_the_generated_item_when_provider_fails():
     item = generate_item("AA.SL.CALC.DIFF.CHAIN.T003", seed=2)
-    router = ModelRouter(providers={Provider.ANTHROPIC: _AlwaysFailsProvider()})
+    router = ModelRouter(providers={Provider.GROQ: _AlwaysFailsProvider()})
     action = Action(action_type=ActionType.CHALLENGE, move="extension_question", reason="test")
 
     response = await tutor_agent.generate(action, "I got it right", router, challenge_item=item)
@@ -376,7 +376,7 @@ async def test_review_question_draft_leaking_the_items_answer_is_blocked():
 @pytest.mark.asyncio
 async def test_review_question_fallback_uses_the_generated_item_when_provider_fails():
     item = generate_item("AA.SL.CALC.DIFF.CHAIN.T003", seed=2)
-    router = ModelRouter(providers={Provider.ANTHROPIC: _AlwaysFailsProvider()})
+    router = ModelRouter(providers={Provider.GROQ: _AlwaysFailsProvider()})
     action = Action(action_type=ActionType.QUESTION, move="retrieval_practice", reason="exam_prep_review_due")
 
     response = await tutor_agent.generate(action, "help me review", router, challenge_item=item)
@@ -627,10 +627,10 @@ async def test_critic_revise_verdict_falls_back_when_regeneration_provider_fails
             if not self._responses:
                 raise ModelUnavailableError("simulated outage on regeneration attempt")
             text = self._responses.pop(0)
-            return LLMCallResult(text=text, model=spec.model, provider=Provider.ANTHROPIC)
+            return LLMCallResult(text=text, model=spec.model, provider=Provider.GROQ)
 
     action = Action(action_type=ActionType.EXPLAIN, move="direct_explanation", reason="test")
-    router = ModelRouter(providers={Provider.ANTHROPIC: _FailsOnThirdCallProvider()})
+    router = ModelRouter(providers={Provider.GROQ: _FailsOnThirdCallProvider()})
 
     response = await tutor_agent.generate(action, "explain something", router)
 

@@ -38,9 +38,11 @@ import abc
 import json
 from typing import Optional
 
+import aiosqlite
 from pydantic import BaseModel, Field
 
 from app.models.contracts import Action, ActionType, IntentType, MAX_HINT_LADDER_LEVEL
+from app.storage.schema import SqliteBackedStore
 
 
 class ProblemSessionState(BaseModel):
@@ -109,3 +111,30 @@ class RedisSessionStateStore(SessionStateStore):
 
     async def save(self, state: ProblemSessionState) -> None:
         await self._redis.set(self._key(state.session_id), state.model_dump_json())
+
+
+class SqliteSessionStateStore(SessionStateStore, SqliteBackedStore):
+    """File-based persistence for the MVP: no separate Redis server to
+    run, and the hint ladder survives a process restart - the one thing
+    InMemorySessionStateStore explicitly can't do."""
+
+    async def get(self, session_id: str, problem_id: Optional[str]) -> ProblemSessionState:
+        await self._ensure_schema()
+        async with aiosqlite.connect(self._db_path) as db:
+            async with db.execute(
+                "SELECT data FROM session_state WHERE session_id = ?", (session_id,)
+            ) as cursor:
+                row = await cursor.fetchone()
+        if row is None:
+            return ProblemSessionState(session_id=session_id, problem_id=problem_id)
+        return ProblemSessionState(**json.loads(row[0]))
+
+    async def save(self, state: ProblemSessionState) -> None:
+        await self._ensure_schema()
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.execute(
+                "INSERT INTO session_state (session_id, data) VALUES (?, ?) "
+                "ON CONFLICT(session_id) DO UPDATE SET data = excluded.data",
+                (state.session_id, state.model_dump_json()),
+            )
+            await db.commit()

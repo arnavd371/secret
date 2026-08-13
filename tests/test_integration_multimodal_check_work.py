@@ -31,10 +31,10 @@ class ScriptedProvider(ProviderClient):
 
     async def generate(self, *, spec, system, user, images=None) -> LLMCallResult:
         if system.startswith("You are a strict, checklist-driven critic"):
-            return LLMCallResult(text='{"verdict": "pass", "violations": []}', model=spec.model, provider=Provider.ANTHROPIC)
+            return LLMCallResult(text='{"verdict": "pass", "violations": []}', model=spec.model, provider=Provider.GROQ)
         self.calls.append({"model": spec.model, "system": system, "user": user, "images": images})
         text = self._responses.pop(0)
-        return LLMCallResult(text=text, model=spec.model, provider=Provider.ANTHROPIC)
+        return LLMCallResult(text=text, model=spec.model, provider=Provider.GROQ)
 
 
 def _check_work_intent_json() -> str:
@@ -65,7 +65,7 @@ async def test_high_confidence_photo_is_graded_for_real_without_tutor_llm():
         "therefore dy/dx = 2*x*sin(x) + x**2*cos(x)"
     )
     provider = ScriptedProvider([_check_work_intent_json(), transcription])
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
 
     result = await handle_turn(
@@ -90,7 +90,7 @@ async def test_high_confidence_photo_is_graded_for_real_without_tutor_llm():
 @pytest.mark.asyncio
 async def test_low_confidence_photo_asks_for_confirmation_instead_of_grading():
     provider = ScriptedProvider([_check_work_intent_json(), "x"])
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
 
     result = await handle_turn(
@@ -111,7 +111,7 @@ async def test_low_confidence_photo_asks_for_confirmation_instead_of_grading():
 @pytest.mark.asyncio
 async def test_rejected_intake_short_circuits_before_any_ocr_call():
     provider = ScriptedProvider([_check_work_intent_json(), "SHOULD NEVER BE CONSUMED"])
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
 
     tiny_image = _png_bytes(width=10, height=10)
@@ -139,7 +139,7 @@ async def test_explicit_student_work_text_takes_precedence_over_image():
     OCR call) must be ignored entirely rather than overwriting good text
     with a re-transcription."""
     provider = ScriptedProvider([_check_work_intent_json(), "SHOULD NEVER BE CONSUMED"])
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
 
     work = "u = x**2, v = sin(x)\nu_prime = 2*x\nv_prime = cos(x)\ntherefore dy/dx = 2*x*sin(x) + x**2*cos(x)"

@@ -33,7 +33,7 @@ class ScriptedProvider(ProviderClient):
     generate, per turn — skipping tutor generate on a REFUSE turn).
 
     Phase 6's Verifier/Critic makes an additional, independent model call
-    per turn (same shared Provider.ANTHROPIC queue). These tests aren't
+    per turn (same shared Provider.GROQ queue). These tests aren't
     exercising critic behavior, so a critic-shaped system prompt is
     auto-passed here without consuming a slot in the scripted queue,
     keeping every existing test's intent/tutor script untouched."""
@@ -44,12 +44,12 @@ class ScriptedProvider(ProviderClient):
 
     async def generate(self, *, spec, system, user, images=None) -> LLMCallResult:
         if system.startswith("You are a strict, checklist-driven critic"):
-            return LLMCallResult(text='{"verdict": "pass", "violations": []}', model=spec.model, provider=Provider.ANTHROPIC)
+            return LLMCallResult(text='{"verdict": "pass", "violations": []}', model=spec.model, provider=Provider.GROQ)
         self.calls.append({"model": spec.model, "system": system, "user": user})
         if not self._responses:
             raise ModelUnavailableError("scripted responses exhausted")
         text = self._responses.pop(0)
-        return LLMCallResult(text=text, model=spec.model, provider=Provider.ANTHROPIC)
+        return LLMCallResult(text=text, model=spec.model, provider=Provider.GROQ)
 
 
 def _intent_json(
@@ -92,7 +92,7 @@ async def test_scripted_conversation_hint_ladder_escalates_and_resets():
             "What kind of function is this, and which rule usually applies to it?",
         ]
     )
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
 
     common = dict(session_id="sess-1", student_id="student-1", router=router, session_store=store)
@@ -127,7 +127,7 @@ async def test_live_exam_hard_gate_short_circuits_before_tutor_agent():
             "THIS RESPONSE MUST NEVER BE CONSUMED — the tutor agent must not be called on a REFUSE turn.",
         ]
     )
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
 
     result = await handle_turn(
@@ -157,7 +157,7 @@ async def test_leaked_answer_in_hint_response_is_structurally_blocked():
             "Here's a leaked hint: the answer is 17, so you're done.",
         ]
     )
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
 
     # Seed state so this single turn lands on attempt_count=2 (a HINT

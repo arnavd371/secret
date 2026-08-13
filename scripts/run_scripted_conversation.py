@@ -85,7 +85,7 @@ def _intent_json(
 
 class ScriptedProvider(ProviderClient):
     """Phase 6's Verifier/Critic makes an additional, independent model
-    call per turn on the same shared Provider.ANTHROPIC queue. This demo
+    call per turn on the same shared Provider.GROQ queue. This demo
     isn't scripting critic behavior, so a critic-shaped system prompt is
     auto-passed without consuming a slot in the scripted queue."""
 
@@ -94,9 +94,9 @@ class ScriptedProvider(ProviderClient):
 
     async def generate(self, *, spec, system, user, images=None) -> LLMCallResult:
         if system.startswith("You are a strict, checklist-driven critic"):
-            return LLMCallResult(text='{"verdict": "pass", "violations": []}', model=spec.model, provider=Provider.ANTHROPIC)
+            return LLMCallResult(text='{"verdict": "pass", "violations": []}', model=spec.model, provider=Provider.GROQ)
         text = self._responses.pop(0)
-        return LLMCallResult(text=text, model=spec.model, provider=Provider.ANTHROPIC)
+        return LLMCallResult(text=text, model=spec.model, provider=Provider.GROQ)
 
 
 _CORRECT_CHAIN_RULE_WORK = "u = 2*x + 1\ntherefore dy/dx = 5*(2*x + 1)**4 * 2"
@@ -220,7 +220,7 @@ TURNS: list[tuple[str, str, Optional[str], Optional[bytes]]] = [
 
 
 async def main() -> None:
-    router = ModelRouter(providers={Provider.ANTHROPIC: ScriptedProvider(SCRIPT)})
+    router = ModelRouter(providers={Provider.GROQ: ScriptedProvider(SCRIPT)})
     store = InMemorySessionStateStore()
     memory_store = InMemoryMemoryStore()
     review_store = InMemoryReviewStateStore()

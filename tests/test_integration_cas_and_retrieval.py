@@ -19,7 +19,7 @@ from app.session.state import InMemorySessionStateStore
 
 class ScriptedProvider(ProviderClient):
     """Phase 6's Verifier/Critic makes an additional, independent model
-    call per turn on the same shared Provider.ANTHROPIC queue. These
+    call per turn on the same shared Provider.GROQ queue. These
     tests aren't exercising critic behavior, so a critic-shaped system
     prompt is auto-passed without consuming a slot in the scripted queue."""
 
@@ -29,10 +29,10 @@ class ScriptedProvider(ProviderClient):
 
     async def generate(self, *, spec, system, user, images=None) -> LLMCallResult:
         if system.startswith("You are a strict, checklist-driven critic"):
-            return LLMCallResult(text='{"verdict": "pass", "violations": []}', model=spec.model, provider=Provider.ANTHROPIC)
+            return LLMCallResult(text='{"verdict": "pass", "violations": []}', model=spec.model, provider=Provider.GROQ)
         self.calls.append({"model": spec.model, "system": system, "user": user})
         text = self._responses.pop(0)
-        return LLMCallResult(text=text, model=spec.model, provider=Provider.ANTHROPIC)
+        return LLMCallResult(text=text, model=spec.model, provider=Provider.GROQ)
 
 
 def _intent_json(intent: str, topic_hint: str | None = None) -> str:
@@ -57,7 +57,7 @@ async def test_concept_explain_turn_is_grounded_by_real_cas_and_retrieval():
             "Using the power rule, the derivative is 2*x.",
         ]
     )
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
 
     result = await handle_turn(
@@ -88,7 +88,7 @@ async def test_concept_explain_turn_with_wrong_draft_is_corrected_by_cas():
             "Using the power rule, the answer is 5*x.",  # wrong
         ]
     )
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
 
     result = await handle_turn(
@@ -116,7 +116,7 @@ async def test_question_action_does_not_run_cas_or_retrieval():
             "What do you think the first step is?",
         ]
     )
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
 
     result = await handle_turn(

@@ -9,7 +9,7 @@ from app.models.contracts import AssessmentMode, IntentType
 
 
 def _router_with_json_response(payload: dict) -> ModelRouter:
-    return ModelRouter(providers={Provider.ANTHROPIC: MockProvider(canned_response=json.dumps(payload))})
+    return ModelRouter(providers={Provider.GROQ: MockProvider(canned_response=json.dumps(payload))})
 
 
 class _AlwaysFailsProvider:
@@ -57,7 +57,7 @@ async def test_classify_intent_low_confidence_falls_back_to_safe_default():
 
 @pytest.mark.asyncio
 async def test_classify_intent_falls_back_on_unparseable_response():
-    router = ModelRouter(providers={Provider.ANTHROPIC: MockProvider(canned_response="not json at all")})
+    router = ModelRouter(providers={Provider.GROQ: MockProvider(canned_response="not json at all")})
     result = await classify_intent("hello", router)
     assert result.intent == IntentType.CONCEPT_EXPLAIN
     assert result.confidence == LOW_CONFIDENCE_THRESHOLD
@@ -65,6 +65,6 @@ async def test_classify_intent_falls_back_on_unparseable_response():
 
 @pytest.mark.asyncio
 async def test_classify_intent_falls_back_when_provider_unavailable():
-    router = ModelRouter(providers={Provider.ANTHROPIC: _AlwaysFailsProvider()})
+    router = ModelRouter(providers={Provider.GROQ: _AlwaysFailsProvider()})
     result = await classify_intent("hello", router)
     assert result.intent == IntentType.CONCEPT_EXPLAIN

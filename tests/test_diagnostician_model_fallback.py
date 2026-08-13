@@ -14,7 +14,7 @@ from app.llm.router_config import Provider
 
 
 def _router_with_canned_response(text: str) -> ModelRouter:
-    return ModelRouter(providers={Provider.ANTHROPIC: MockProvider(canned_response=text)})
+    return ModelRouter(providers={Provider.GROQ: MockProvider(canned_response=text)})
 
 
 @pytest.mark.asyncio
@@ -68,7 +68,7 @@ class _AlwaysFailsProvider:
 
 @pytest.mark.asyncio
 async def test_call_failure_degrades_to_no_diagnosis_instead_of_raising():
-    router = ModelRouter(providers={Provider.ANTHROPIC: _AlwaysFailsProvider()})
+    router = ModelRouter(providers={Provider.GROQ: _AlwaysFailsProvider()})
     result = await diagnose_via_model(router, "differentiate", "x**2", "2*x", "3*x")
     assert result.misconception_id is None
     assert "unavailable" in result.evidence

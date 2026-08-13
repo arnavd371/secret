@@ -21,7 +21,7 @@ from app.memory.store import InMemoryMemoryStore
 
 class ScriptedProvider(ProviderClient):
     """Phase 6's Verifier/Critic makes an additional, independent model
-    call per turn on the same shared Provider.ANTHROPIC queue. These
+    call per turn on the same shared Provider.GROQ queue. These
     tests aren't exercising critic behavior, so a critic-shaped system
     prompt is auto-passed without consuming a slot in the scripted queue."""
 
@@ -31,10 +31,10 @@ class ScriptedProvider(ProviderClient):
 
     async def generate(self, *, spec, system, user, images=None) -> LLMCallResult:
         if system.startswith("You are a strict, checklist-driven critic"):
-            return LLMCallResult(text='{"verdict": "pass", "violations": []}', model=spec.model, provider=Provider.ANTHROPIC)
+            return LLMCallResult(text='{"verdict": "pass", "violations": []}', model=spec.model, provider=Provider.GROQ)
         self.calls.append({"model": spec.model, "system": system, "user": user})
         text = self._responses.pop(0)
-        return LLMCallResult(text=text, model=spec.model, provider=Provider.ANTHROPIC)
+        return LLMCallResult(text=text, model=spec.model, provider=Provider.GROQ)
 
 
 def _intent_json(intent: str, topic_hint: str | None = None) -> str:
@@ -57,7 +57,7 @@ TOPIC = "calculus.differentiation.chain_rule"
 @pytest.mark.asyncio
 async def test_correct_grading_persists_a_mastery_update():
     provider = ScriptedProvider([_intent_json("check_work", TOPIC)])
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
     memory_store = InMemoryMemoryStore()
 
@@ -88,7 +88,7 @@ async def test_low_confidence_grading_does_not_write_mastery():
     """A grading with nothing gradeable (no working, no answer) is LOW
     confidence and must not corrupt the persisted mastery model."""
     provider = ScriptedProvider([_intent_json("check_work", TOPIC)])
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
     memory_store = InMemoryMemoryStore()
 
@@ -118,7 +118,7 @@ async def test_persisted_high_mastery_drives_challenge_without_explicit_override
             "Great work, that's correct! Here's a tougher one for you.",
         ]
     )
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
     memory_store = InMemoryMemoryStore()
 
@@ -149,7 +149,7 @@ async def test_explicit_mastery_estimate_overrides_persisted_memory():
     provider = ScriptedProvider(
         [_intent_json("solve_request", TOPIC), "What do you think the first step is?"]
     )
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
     memory_store = InMemoryMemoryStore()
 
@@ -178,7 +178,7 @@ async def test_memory_context_is_populated_on_blackboard_when_record_exists():
     provider = ScriptedProvider(
         [_intent_json("concept_explain", TOPIC), "The chain rule lets you differentiate composite functions."]
     )
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
     memory_store = InMemoryMemoryStore()
 
@@ -203,7 +203,7 @@ async def test_memory_context_is_populated_on_blackboard_when_record_exists():
 @pytest.mark.asyncio
 async def test_no_topic_hint_skips_memory_write_and_read():
     provider = ScriptedProvider([_intent_json("check_work", None)])
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
     memory_store = InMemoryMemoryStore()
 

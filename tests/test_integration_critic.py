@@ -27,7 +27,7 @@ class QueuedProvider(ProviderClient):
     async def generate(self, *, spec, system, user, images=None) -> LLMCallResult:
         self.calls.append({"model": spec.model, "system": system})
         text = self._responses.pop(0)
-        return LLMCallResult(text=text, model=spec.model, provider=Provider.ANTHROPIC)
+        return LLMCallResult(text=text, model=spec.model, provider=Provider.GROQ)
 
 
 def _intent_json(intent: str = "concept_explain") -> str:
@@ -53,7 +53,7 @@ async def test_critic_block_reaches_student_as_templated_fallback():
             json.dumps({"verdict": "block", "violations": ["off-topic"]}),
         ]
     )
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
 
     result = await handle_turn(
@@ -79,7 +79,7 @@ async def test_critic_revise_regenerates_and_serves_the_new_draft():
             "A warmer, regenerated draft.",
         ]
     )
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
 
     result = await handle_turn(
@@ -104,7 +104,7 @@ async def test_critic_pass_serves_the_original_draft_with_metadata():
             json.dumps({"verdict": "pass", "violations": []}),
         ]
     )
-    router = ModelRouter(providers={Provider.ANTHROPIC: provider})
+    router = ModelRouter(providers={Provider.GROQ: provider})
     store = InMemorySessionStateStore()
 
     result = await handle_turn(

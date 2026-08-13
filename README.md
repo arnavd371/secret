@@ -153,13 +153,21 @@ Phase 21, guardrail metrics recorder, is real telemetry infrastructure over the 
 - `compute_guardrail_metrics` aggregates a batch of records into leak-check trigger rate, overall fallback rate, critic-degraded rate, the critic's verdict distribution (computed over turns the critic actually ran on, not diluted by turns it never reached), and an average grounding score (`None`, not a misleading `0.0`, when no turn in the batch had a chunk to ground against at all).
 - Tested with synthetic turns (both direct `ui_metadata` dicts and real `handle_turn` calls with a scripted critic outage), since no live deployment exists to feed this real traffic yet - the aggregation math and the wiring are both real regardless.
 
+MVP pass turns the whole thing from a tested backend library into something you can actually open in a browser and talk to, without a paid API key:
+
+- A real free-tier model provider: `app/llm/client.GroqProvider` talks to Groq's OpenAI-compatible chat completions API over `httpx`. Every capability in `app/llm/router_config.py`'s `CAPABILITY_MODEL_MAP` now names a Groq model by default (Llama 3.1/3.3 for the fast/cheap and generation tiers, Llama 4 Scout - a vision-capable model - for `math_ocr`), so the system runs end to end with only a free `GROQ_API_KEY` from console.groq.com. `AnthropicProvider` is untouched and still fully registered on `ModelRouter`; swapping any single capability back to it (or to a different provider entirely) is still the one-line `router_config.py` change the file's own docstring promises.
+- Real SQLite persistence: every store this codebase has (session state, mastery/misconceptions, FSRS review state, IA/EE project state, the disclosure log, the review queue, response history, guardrail signals) now has a `Sqlite*Store` sibling to its `InMemory*Store` (`app/storage/schema.py` + one `Sqlite*Store` class per store module), all backed by one file (`data/tutor.db`, WAL mode). `app/main.py` uses these by default, so a demo student's mastery and progress survive a server restart - the previous gateway only ever persisted the hint ladder, and only when Redis happened to be running.
+- A richer `/turn` endpoint: accepts `student_work` and a base64-encoded photo (`student_work_image_base64`) alongside the message, and returns real structured JSON (the response text, citations, intent, action type, `ui_metadata`, a grading breakdown when one happened, a diagnosed misconception when one was flagged, a generated item's stem when one was served) instead of a plain streamed-text blob.
+- A minimal static chat UI (`app/static/index.html`) served at `/`: message bubbles, a student/session id pair persisted in `localStorage`, a toggle for "this is work to check" that reveals a separate problem-statement field (kept apart from the working itself, since the CAS extractor needs the problem alone to compute ground truth to grade against) plus a photo attach button, and badges surfacing the action type, mark total, and any diagnosed misconception directly on each response.
+- Verified for real in a live browser session against the actual Groq API (not just against mocks): a real end-to-end turn came back correctly grounded (`grounding_score: 1.0`) and critic-reviewed (`critique_verdict: "revise"`), and a real transient provider failure was caught and correctly labeled by Phase 21's own `fallback_reason: "model_call_failed"` telemetry - the fallback machinery working exactly as designed under an actual failure, not just a scripted one.
+
 Not built yet, with the real reason in each case rather than a bare omission:
 
 - Real curriculum/template content beyond the seed set, and the full spec §8.2 misconception catalog (this build covers four named errors with real detection behind them, not the whole syllabus) - both are unbounded content-authoring work, not an engineering gap.
 - Per-node solution-graph diagnosis for errors that aren't a clean pattern match, and per-IB-assessment-criterion rubric feedback for IA/EE coaching (the coaching is real and bounded, but doesn't score against the actual IB criteria A-E) - both are real scope boundaries of what Phase 8 and Phase 10 actually built, not stubs.
 - The published FSRS algorithm's per-user ML-fitted weights (fixed illustrative parameters are used instead, see Phase 9 above) and grade-boundary calibration from historical exam data - both need real training/historical data this system doesn't have and was never given; fabricating either would be actively misleading in an educational tool, not a shortcut worth taking.
 - A specialized math-OCR service like Mathpix - needs paid third-party API credentials this build doesn't have; a general vision-capable model is used instead, the documented fallback per spec. Multi-page PDF or HEIC image intake (PNG/JPEG only) is the same story at smaller scale: not wired, not attempted.
-- Dense/vector retrieval and a reranker - need a real embedding provider (an API key and a vector index), which contradicts this system's deliberate no-external-API-key-needed-to-run design; Phase 2's TF-IDF retriever is a considered tradeoff for that constraint, not an oversight.
+- Dense/vector retrieval and a reranker - need a real embedding provider and a vector index, a second piece of infrastructure beyond the one chat-completions provider key (Groq, free-tier) this system otherwise needs to run at all; Phase 2's TF-IDF retriever is a considered tradeoff for that constraint, not an oversight.
 - Self-consistency multi-sampling (the CAS/mark-scheme verification this system already has is a stronger deterministic guarantee for the claims that matter, so this was a considered tradeoff at Phase 6, not an oversight).
 - A full turn-wide Planner-produced stage graph (Phase 11's executor is real and general-purpose, but it's applied to the one place in the current turn with genuine independent side effects, not to every stage - most of a turn really is sequential, and forcing a parallel graph onto genuinely dependent stages would be simulated parallelism, not real).
 - Shadow evaluation against live production traffic - this codebase has no live deployment to shadow; Phase 21's guardrail metrics recorder is the real infrastructure a deployment would feed once one exists.
@@ -188,12 +196,15 @@ app/
   privacy/                  GDPR export/erasure across every student-data store
   eval/                     offline eval harness, golden scenarios, regression gate, JSON baseline
   guardrail_metrics/        per-turn signal extraction, append-only store, real aggregation over live traffic
-  llm/                      model router: one config file for all model names, one call() entrypoint
+  storage/                  SQLite schema + SqliteBackedStore base (MVP persistence, one file backs every store)
+  llm/                      model router: one config file for all model names, one call() entrypoint (Groq + Anthropic)
   session/state.py          hint ladder session state
   orchestrator/             wires everything together into handle_turn()
-  main.py                   minimal FastAPI gateway
+  main.py                   FastAPI gateway: /health, /turn, and the static chat UI
+  static/index.html         minimal browser chat UI (message bubbles, check-work toggle, photo attach)
 scripts/run_scripted_conversation.py   runnable demo, no API key needed
 scripts/run_eval.py                    offline eval harness + regression gate, CI-shaped exit code
+data/tutor.db                          SQLite file the MVP gateway persists every store to (gitignored)
 tests/                      unit + integration tests
 ```
 
@@ -205,7 +216,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Run the tests (510 tests, all mocked at the model boundary, no API key or network needed; SymPy, retrieval, item generation, grading, memory math, the grounding check, the multimodal preprocessing/normalization/confidence math, the misconception pattern detectors, the FSRS scheduling math, the IA/EE guard/stage classifier/disclosure formatter, the Planner's dependency-graph executor (including real wall-clock timing assertions proving concurrent, not sequential, execution), the definite-integral/matrix/piecewise CAS operations, the eval harness's regression-gate logic, and the guardrail metrics extraction/aggregation all run for real):
+Run the tests (542 tests, all mocked at the model boundary, no API key or network needed; SymPy, retrieval, item generation, grading, memory math, the grounding check, the multimodal preprocessing/normalization/confidence math, the misconception pattern detectors, the FSRS scheduling math, the IA/EE guard/stage classifier/disclosure formatter, the Planner's dependency-graph executor (including real wall-clock timing assertions proving concurrent, not sequential, execution), the definite-integral/matrix/piecewise CAS operations, the eval harness's regression-gate logic, the guardrail metrics extraction/aggregation, every SQLite store's real round-trip persistence, GroqProvider's real request/response handling, and the FastAPI `/turn` endpoint all run for real):
 
 ```bash
 pytest -q
@@ -223,8 +234,21 @@ Run the scripted demo conversation (shows real mastery climb from three gradings
 python scripts/run_scripted_conversation.py
 ```
 
-Run the gateway (optional, needs ANTHROPIC_API_KEY to actually generate):
+Run the MVP: a real browser chat UI backed by every phase above, for free.
+
+1. Get a free API key at [console.groq.com](https://console.groq.com) (no payment method required for the free tier).
+2. Set it, either in your shell or in a `.env` file at the repo root:
+
+```bash
+export GROQ_API_KEY=your-key-here
+```
+
+3. Start the gateway:
 
 ```bash
 uvicorn app.main:app --reload
 ```
+
+4. Open `http://localhost:8000` in a browser. The first request creates `data/tutor.db` (SQLite, gitignored) - every store persists there, so mastery, review schedules, IA project state, and everything else survive a restart. Type a question, ask for a hint, request a harder problem, or check "this is work to check" to grade a real submission (fill in the problem statement and your working separately - the CAS layer needs the problem alone to compute what to grade against).
+
+Anthropic remains fully supported: `AnthropicProvider` is still registered on `ModelRouter`, so pointing any capability in `app/llm/router_config.py`'s `CAPABILITY_MODEL_MAP` back at `Provider.ANTHROPIC` (with `ANTHROPIC_API_KEY` set) is the same one-line change it always was - nothing else in the codebase needs to know.
