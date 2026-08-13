@@ -6,7 +6,20 @@ needs it to run; it is not itself the focus of this phase.
 
 from __future__ import annotations
 
+import os
+
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _default_sqlite_path() -> str:
+    """Vercel's serverless filesystem is read-only outside /tmp, and
+    /tmp itself is wiped between cold starts and isn't shared across
+    concurrent instances - so this is NOT durable persistence the way
+    "data/tutor.db" is for a normal long-running local/server process.
+    Vercel sets its own VERCEL env var at runtime, which is the real
+    signal to use here rather than guessing from environment='dev'."""
+    return "/tmp/tutor.db" if os.environ.get("VERCEL") else "data/tutor.db"
 
 
 class Settings(BaseSettings):
@@ -21,7 +34,7 @@ class Settings(BaseSettings):
     # this locally with state that survives a restart. database_url and
     # redis_url above remain unused by app.main for now, kept as the
     # documented path to a real multi-instance deployment later.
-    sqlite_db_path: str = "data/tutor.db"
+    sqlite_db_path: str = Field(default_factory=_default_sqlite_path)
 
     anthropic_api_key: str | None = None
     groq_api_key: str | None = None

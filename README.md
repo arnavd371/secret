@@ -202,6 +202,8 @@ app/
   orchestrator/             wires everything together into handle_turn()
   main.py                   FastAPI gateway: /health, /turn, and the static chat UI
   static/index.html         minimal browser chat UI (message bubbles, check-work toggle, photo attach)
+api/index.py                           Vercel's ASGI entrypoint - re-exports app.main.app, nothing else
+vercel.json                            Vercel build/route/timeout config
 scripts/run_scripted_conversation.py   runnable demo, no API key needed
 scripts/run_eval.py                    offline eval harness + regression gate, CI-shaped exit code
 data/tutor.db                          SQLite file the MVP gateway persists every store to (gitignored)
@@ -216,7 +218,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Run the tests (542 tests, all mocked at the model boundary, no API key or network needed; SymPy, retrieval, item generation, grading, memory math, the grounding check, the multimodal preprocessing/normalization/confidence math, the misconception pattern detectors, the FSRS scheduling math, the IA/EE guard/stage classifier/disclosure formatter, the Planner's dependency-graph executor (including real wall-clock timing assertions proving concurrent, not sequential, execution), the definite-integral/matrix/piecewise CAS operations, the eval harness's regression-gate logic, the guardrail metrics extraction/aggregation, every SQLite store's real round-trip persistence, GroqProvider's real request/response handling, and the FastAPI `/turn` endpoint all run for real):
+Run the tests (547 tests, all mocked at the model boundary, no API key or network needed; SymPy, retrieval, item generation, grading, memory math, the grounding check, the multimodal preprocessing/normalization/confidence math, the misconception pattern detectors, the FSRS scheduling math, the IA/EE guard/stage classifier/disclosure formatter, the Planner's dependency-graph executor (including real wall-clock timing assertions proving concurrent, not sequential, execution), the definite-integral/matrix/piecewise CAS operations, the eval harness's regression-gate logic, the guardrail metrics extraction/aggregation, every SQLite store's real round-trip persistence, GroqProvider's real request/response handling, the FastAPI `/turn` endpoint, and the Vercel ASGI entrypoint/config-switching all run for real):
 
 ```bash
 pytest -q
@@ -252,3 +254,13 @@ uvicorn app.main:app --reload
 4. Open `http://localhost:8000` in a browser. The first request creates `data/tutor.db` (SQLite, gitignored) - every store persists there, so mastery, review schedules, IA project state, and everything else survive a restart. Type a question, ask for a hint, request a harder problem, or check "this is work to check" to grade a real submission (fill in the problem statement and your working separately - the CAS layer needs the problem alone to compute what to grade against).
 
 Anthropic remains fully supported: `AnthropicProvider` is still registered on `ModelRouter`, so pointing any capability in `app/llm/router_config.py`'s `CAPABILITY_MODEL_MAP` back at `Provider.ANTHROPIC` (with `ANTHROPIC_API_KEY` set) is the same one-line change it always was - nothing else in the codebase needs to know.
+
+### Deploying to Vercel
+
+`api/index.py` re-exports the real FastAPI `app` object (Vercel's Python runtime auto-detects an ASGI `app` under `/api`), and `vercel.json` routes every path to it with a 30-second function timeout (a single turn can involve two or three sequential LLM calls - intent classify, generation, critic - so the default 10s is too tight).
+
+1. Push this repo to GitHub (already done for this project), then import it at [vercel.com/new](https://vercel.com/new) - "Add New Project" -> pick the repo. Vercel detects the Python function from `vercel.json` automatically, no framework preset needed.
+2. In the project's Settings -> Environment Variables, add `GROQ_API_KEY` with your key. This happens entirely in Vercel's own dashboard - nothing to paste anywhere else.
+3. Deploy. Every push to `main` redeploys automatically from then on.
+
+**One real, honest tradeoff of this deployment mode**: Vercel's serverless filesystem is read-only outside `/tmp`, and `/tmp` is wiped on every cold start and isn't shared across concurrent instances. `app/config.py` detects Vercel's own `VERCEL` env var and points `sqlite_db_path` at `/tmp/tutor.db` automatically, so the app runs correctly there - but state does **not** durably persist the way it does with `data/tutor.db` on a normal long-running process (the whole point of the SQLite work above). This is fine for "let someone try it," not for "my own history sticks around." A durable Vercel deployment would mean pointing `sqlite_db_path` at a real hosted database instead (Vercel Postgres, Turso, or similar) - a real follow-up, not done here, and not silently glossed over either.
