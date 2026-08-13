@@ -696,3 +696,67 @@ async def test_below_threshold_retrieved_chunks_do_not_trigger_a_grounding_failu
 
     assert response.ui_metadata["templated"] is False
     assert response.citations == []
+
+
+# ---------------------------------------------------------------------------
+# _strip_trailing_json_echo: a weaker model can literally comply with a now-
+# removed "OUTPUT SCHEMA" instruction and echo a stray {"text": ...} blob
+# after its real prose - nothing downstream ever parsed that JSON, so it
+# must be stripped as a real deterministic backstop, not left to the prompt.
+# ---------------------------------------------------------------------------
+
+
+def test_find_trailing_json_object_isolates_only_the_trailing_balanced_blob():
+    text = 'The derivative is \\frac{d}{dx}. {"text": "answer", "citations": []}'
+    found = tutor_agent._find_trailing_json_object(text)
+    assert found == '{"text": "answer", "citations": []}'
+
+
+def test_find_trailing_json_object_returns_none_when_text_does_not_end_in_brace():
+    assert tutor_agent._find_trailing_json_object("just plain prose.") is None
+
+
+def test_strip_trailing_json_echo_removes_a_real_schema_echo():
+    text = 'The chain rule multiplies the outer and inner derivatives.\n\n{"text": "dup", "citations": [], "ui_hints": {"show_hint_button": false}}'
+    cleaned = tutor_agent._strip_trailing_json_echo(text)
+    assert cleaned == "The chain rule multiplies the outer and inner derivatives."
+
+
+def test_strip_trailing_json_echo_leaves_real_latex_braces_untouched():
+    text = "The derivative of x^2 is 2x, written \\(\\frac{d}{dx}x^2 = 2x\\)."
+    assert tutor_agent._strip_trailing_json_echo(text) == text
+
+
+def test_strip_trailing_json_echo_leaves_a_trailing_brace_that_is_not_json():
+    text = "Solve for the set {1, 2, 3}"
+    assert tutor_agent._strip_trailing_json_echo(text) == text
+
+
+def test_strip_trailing_json_echo_leaves_json_with_unrelated_keys_untouched():
+    """Only strips a blob carrying this codebase's own specific
+    (unused) schema keys - an unrelated trailing JSON object a student
+    might paste as part of their own message must never be touched."""
+    text = 'my array is {"a": 1, "b": 2}'
+    assert tutor_agent._strip_trailing_json_echo(text) == text
+
+
+def test_strip_trailing_json_echo_recovers_the_real_text_when_the_whole_draft_is_wrapped():
+    text = json.dumps({"text": "The real answer lives here.", "citations": [], "ui_hints": {"show_hint_button": True}})
+    assert tutor_agent._strip_trailing_json_echo(text) == "The real answer lives here."
+
+
+@pytest.mark.asyncio
+async def test_generate_strips_a_real_trailing_json_echo_from_a_live_style_draft():
+    draft = (
+        "A vector has both magnitude and direction.\n\n"
+        '{"text": "A vector has both magnitude and direction.", "citations": [], '
+        '"ui_hints": {"show_hint_button": false}}'
+    )
+    router = _router_with_canned_response(draft)
+    action = Action(action_type=ActionType.EXPLAIN, move="direct_explanation", reason="test")
+
+    response = await tutor_agent.generate(action, "what is a vector?", router)
+
+    assert response.text == "A vector has both magnitude and direction."
+    assert '"citations"' not in response.text
+    assert '"ui_hints"' not in response.text

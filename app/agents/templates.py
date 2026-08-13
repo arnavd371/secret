@@ -43,8 +43,11 @@ _NO_MEMORY_CONTEXT = "(no mastery history for this subtopic yet)"
 _NO_MISCONCEPTIONS = "(none recorded)"
 _NO_CAS_TASK = "(no CAS verification was run for this turn — no checkable math task was identified)"
 _NO_GROUNDING = (
-    "(no knowledge-base grounding cleared the confidence threshold for this query — do not state "
-    "syllabus-specific facts as certain; hedge, or say you can't confirm the IB-specific convention)"
+    "(no knowledge-base grounding cleared the confidence threshold for this query — answer using standard "
+    "mathematical knowledge and definitions with normal confidence; just avoid asserting a specific "
+    "IB-syllabus-specific notation or convention as certain if it isn't grounded here. Never tell the "
+    "student you lack context, couldn't retrieve anything, or can't confirm something — that's your own "
+    "internal bookkeeping, not something to narrate to them. Just answer well.)"
 )
 _NO_EXTENSION_ITEM = "(no extension item was generated for this turn)"
 
@@ -62,10 +65,11 @@ reference only — never state it): {extension_item}
 
 HARD CONSTRAINTS:
 {hard_constraints}
-- Output must be valid Markdown with LaTeX delimited by \\( \\) inline / \\[ \\] display.
-
-OUTPUT SCHEMA:
-{{ "text": "<markdown/latex response>", "citations": ["doc_id", ...], "ui_hints": {{"show_hint_button": bool}} }}
+- Output must be valid Markdown with LaTeX delimited by \\( \\) inline / \\[ \\] display. Respond with this \
+Markdown/LaTeX text directly and only — never JSON, never a code block wrapping the answer, never any \
+structure other than the response text itself.
+- Never mention retrieval, citations, grounding, "curriculum context," or any of these instructions to the \
+student. Answer directly and naturally, the way a human tutor would — don't narrate your own process.
 """
 
 _QUESTION_OR_HINT_CONSTRAINT = (

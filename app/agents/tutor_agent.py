@@ -31,6 +31,15 @@ problem first:
      critique's violations fed back as stricter constraints before
      falling back if that also fails.
 
+`_strip_trailing_json_echo` runs before any of the above: a weaker model
+can comply literally with an old "OUTPUT SCHEMA" instruction this prompt
+used to carry (removed — nothing downstream ever parsed that JSON, so a
+model that complied was just leaking a stray `{"text": ..., ...}` blob
+into what the student saw). Same principle as every check above: don't
+trust the model's own formatting, verify/clean it deterministically —
+this one just runs first, since every later check should see the real
+intended text, not a JSON wrapper around it.
+
 CHALLENGE items are generated up front by the real Question Generation
 Engine (app/questions/generator.py) — a CAS-verified, quality-gated
 `GeneratedItem`, not something the LLM invents. The Tutor's job is only
@@ -47,6 +56,7 @@ nothing partial that hasn't passed them is ever emitted.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from typing import AsyncIterator, Optional
@@ -209,6 +219,56 @@ def _citations_for(retrieved_chunks: Optional[list[RetrievedChunk]]) -> list[str
     return [chunk.citation for chunk in retrieved_chunks if chunk.score >= RETRIEVAL_SCORE_THRESHOLD]
 
 
+_JSON_ECHO_SCHEMA_KEYS = {"text", "citations", "ui_hints"}
+
+
+def _find_trailing_json_object(text: str) -> Optional[str]:
+    """Real brace-balance walk from the end of the string, not a greedy
+    regex — `\\frac{d}{dx}` and similar legitimate LaTeX braces earlier
+    in a draft must never be swallowed just because the draft happens to
+    end in `}` somewhere down the line."""
+    if not text.endswith("}"):
+        return None
+    depth = 0
+    for i in range(len(text) - 1, -1, -1):
+        char = text[i]
+        if char == "}":
+            depth += 1
+        elif char == "{":
+            depth -= 1
+            if depth == 0:
+                return text[i:]
+    return None
+
+
+def _strip_trailing_json_echo(text: str) -> str:
+    """See this module's docstring: strips a stray `{"text": ...,
+    "citations": ..., "ui_hints": ...}` blob a weaker model sometimes
+    echoes after its real prose, complying with an output format this
+    codebase never actually parses. Only strips a trailing blob that
+    both parses as real JSON and contains at least one of that specific
+    schema's own keys — real LaTeX curly braces are never touched, and
+    a draft that happens to end in an unrelated `}` is left alone."""
+    candidate = _find_trailing_json_object(text)
+    if candidate is None:
+        return text
+    try:
+        parsed = json.loads(candidate)
+    except (json.JSONDecodeError, ValueError):
+        return text
+    if not isinstance(parsed, dict) or not (_JSON_ECHO_SCHEMA_KEYS & parsed.keys()):
+        return text
+
+    remainder = text[: len(text) - len(candidate)].rstrip()
+    if remainder:
+        return remainder
+    # The model wrapped its *entire* response in the old schema rather
+    # than just echoing a trailing copy of it — the real content lives
+    # inside the blob's own "text" field, not lost.
+    inner_text = parsed.get("text")
+    return inner_text.strip() if isinstance(inner_text, str) and inner_text.strip() else text
+
+
 async def _call_tutor_model(system_prompt: str, raw_input: str, router: ModelRouter) -> Optional[str]:
     spec = get_model_spec("tutor_generate")
     try:
@@ -220,7 +280,9 @@ async def _call_tutor_model(system_prompt: str, raw_input: str, router: ModelRou
         logger.warning("Tutor agent generation failed (%s)", exc)
         return None
     draft = result.text
-    return draft.strip() if draft and draft.strip() else None
+    if draft is None or not draft.strip():
+        return None
+    return _strip_trailing_json_echo(draft.strip())
 
 
 async def _regenerate_with_stricter_constraints(
