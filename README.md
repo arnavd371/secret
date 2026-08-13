@@ -257,10 +257,12 @@ Anthropic remains fully supported: `AnthropicProvider` is still registered on `M
 
 ### Deploying to Vercel
 
-`api/index.py` re-exports the real FastAPI `app` object (Vercel's Python runtime auto-detects an ASGI `app` under `/api`), and `vercel.json` routes every path to it with a 30-second function timeout (a single turn can involve two or three sequential LLM calls - intent classify, generation, critic - so the default 10s is too tight).
+`api/index.py` re-exports the real FastAPI `app` object; Vercel's Python runtime auto-detects it as an ASGI function from its location under `/api`, with no `builds`/`routes` config needed (a `rewrites` block was tried first and removed - Vercel's newer "route by rewritten destination path" behavior for backend-framework projects broke FastAPI's own path-based routing, since every request arrived at the ASGI app as `/api/index` instead of its real path). `vercel.json` now only sets a 30-second function timeout (a single turn can involve two or three sequential LLM calls - intent classify, generation, critic - so the platform default of 10s is too tight).
 
-1. Push this repo to GitHub (already done for this project), then import it at [vercel.com/new](https://vercel.com/new) - "Add New Project" -> pick the repo. Vercel detects the Python function from `vercel.json` automatically, no framework preset needed.
+1. Push this repo to GitHub (already done for this project), then import it at [vercel.com/new](https://vercel.com/new) - "Add New Project" -> pick the repo. Vercel detects the Python function automatically, no framework preset needed.
 2. In the project's Settings -> Environment Variables, add `GROQ_API_KEY` with your key. This happens entirely in Vercel's own dashboard - nothing to paste anywhere else.
 3. Deploy. Every push to `main` redeploys automatically from then on.
+
+Deployed and verified live at `https://secret-opal-chi.vercel.app` (a real end-to-end turn through the actual Groq API, correctly grounded, `grounding_score: 1.0`).
 
 **One real, honest tradeoff of this deployment mode**: Vercel's serverless filesystem is read-only outside `/tmp`, and `/tmp` is wiped on every cold start and isn't shared across concurrent instances. `app/config.py` detects Vercel's own `VERCEL` env var and points `sqlite_db_path` at `/tmp/tutor.db` automatically, so the app runs correctly there - but state does **not** durably persist the way it does with `data/tutor.db` on a normal long-running process (the whole point of the SQLite work above). This is fine for "let someone try it," not for "my own history sticks around." A durable Vercel deployment would mean pointing `sqlite_db_path` at a real hosted database instead (Vercel Postgres, Turso, or similar) - a real follow-up, not done here, and not silently glossed over either.
