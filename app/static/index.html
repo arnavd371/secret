@@ -133,16 +133,103 @@
   #image-name { color: var(--muted); }
   #status { font-size: 12px; color: var(--muted); min-height: 16px; }
   #status.error { color: var(--danger); }
+  #help-btn {
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border-radius: 999px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-size: 13px;
+    line-height: 1;
+  }
+  #help-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    z-index: 10;
+  }
+  #help-overlay.open { display: flex; }
+  #help-modal {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    max-width: 520px;
+    width: 100%;
+    max-height: 85vh;
+    overflow-y: auto;
+    padding: 22px 24px;
+  }
+  #help-modal h2 {
+    margin: 0 0 14px;
+    font-size: 16px;
+  }
+  #help-modal ol {
+    margin: 0;
+    padding-left: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  #help-modal li { font-size: 13.5px; line-height: 1.5; }
+  #help-modal li strong { color: var(--text); }
+  #help-modal li span.detail { display: block; color: var(--muted); margin-top: 2px; }
+  #help-modal .close-row { display: flex; justify-content: flex-end; margin-top: 18px; }
+  #help-close {
+    height: 36px;
+    padding: 0 16px;
+  }
 </style>
 </head>
 <body>
 <header>
   <h1>AI Tutor - IB DP Math AA (MVP demo)</h1>
   <div class="ids">
+    <button id="help-btn" title="How to use this">?</button>
     <span>student: <input id="student-id" /></span>
     <span>session: <input id="session-id" /></span>
   </div>
 </header>
+
+<div id="help-overlay">
+  <div id="help-modal">
+    <h2>How to use this tutor</h2>
+    <ol>
+      <li>
+        <strong>Ask about a topic.</strong>
+        <span class="detail">Type a question like "explain the chain rule" for a full explanation.</span>
+      </li>
+      <li>
+        <strong>Stuck on a problem?</strong>
+        <span class="detail">Ask for help with it directly. You'll get a hint, not the answer - ask again after each attempt and the hints get more specific.</span>
+      </li>
+      <li>
+        <strong>Get your work checked.</strong>
+        <span class="detail">Tick "this is work to check", type the problem in the field that appears, then your working in the message box below it - two separate fields, so it grades against the right problem.</span>
+      </li>
+      <li>
+        <strong>Or just photograph it.</strong>
+        <span class="detail">With "this is work to check" ticked, use "attach photo" instead of typing your working - a picture of your handwritten steps works too.</span>
+      </li>
+      <li>
+        <strong>Ready for something harder?</strong>
+        <span class="detail">Once you've shown you've got a topic down, ask to be challenged and you'll get a tougher problem to try instead of a repeat.</span>
+      </li>
+      <li>
+        <strong>Your progress carries over.</strong>
+        <span class="detail">The student/session codes in the top right identify you between visits - keep them the same (they're saved automatically) to pick up where you left off.</span>
+      </li>
+    </ol>
+    <div class="close-row">
+      <button id="help-close">Got it</button>
+    </div>
+  </div>
+</div>
 
 <div id="chat"></div>
 
@@ -180,6 +267,28 @@ const problemEl = document.getElementById("problem");
 const imageInputEl = document.getElementById("image-input");
 const attachBtnEl = document.getElementById("attach-btn");
 const imageNameEl = document.getElementById("image-name");
+const helpBtnEl = document.getElementById("help-btn");
+const helpOverlayEl = document.getElementById("help-overlay");
+const helpCloseEl = document.getElementById("help-close");
+
+function openHelp() {
+  helpOverlayEl.classList.add("open");
+}
+function closeHelp() {
+  helpOverlayEl.classList.remove("open");
+  localStorage.setItem("tutor_seen_guide", "1");
+}
+helpBtnEl.addEventListener("click", openHelp);
+helpCloseEl.addEventListener("click", closeHelp);
+helpOverlayEl.addEventListener("click", (e) => {
+  if (e.target === helpOverlayEl) closeHelp();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && helpOverlayEl.classList.contains("open")) closeHelp();
+});
+if (!localStorage.getItem("tutor_seen_guide")) {
+  openHelp();
+}
 
 isCheckWorkEl.addEventListener("change", () => {
   problemEl.style.display = isCheckWorkEl.checked ? "block" : "none";
