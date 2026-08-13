@@ -4,6 +4,17 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>AI Tutor (MVP)</title>
+<!-- KaTeX: renders the \( \)/\[ \]-delimited LaTeX the Tutor's system
+     prompt (app/agents/templates.py) actually instructs the model to
+     use, plus $ $/$$ $$ as a fallback for the common convention models
+     default to regardless. Pinned version + real SRI hashes (computed
+     from the actual served files), not blind trust in the CDN. -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css"
+      integrity="sha384-nB0miv6/jRmo5UMMR1wu3Gz6NLsoTkbqJghGIsx//Rlm+ZU03BU6SQNC66uf4l5+" crossorigin="anonymous">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"
+        integrity="sha384-7zkQWkzuo3B5mTepMUcHkMB5jZaolc2xDwL6VFqjFALcbeS9Ggm/Yr2r3Dy4lfFg" crossorigin="anonymous"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"
+        integrity="sha384-43gviWU0YVjaDtb/GhzOouOXtZMP/7XUzwPTstBeZFe/+rCMvRwr4yROQP43s0Xk" crossorigin="anonymous"></script>
 <style>
   :root {
     --bg: #0f1115;
@@ -133,6 +144,13 @@
   #image-name { color: var(--muted); }
   #status { font-size: 12px; color: var(--muted); min-height: 16px; }
   #status.error { color: var(--danger); }
+  .bubble .katex { color: inherit; font-size: 1.05em; }
+  .bubble .katex-display {
+    margin: 6px 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-bottom: 2px;
+  }
   #help-btn {
     width: 28px;
     height: 28px;
@@ -348,6 +366,32 @@ function badge(cls, text) {
   return span;
 }
 
+// KaTeX auto-render walks the *already-rendered* DOM subtree looking for
+// delimited math and replacing just those spans - it never touches how
+// the surrounding text got there. Every bubble above is still built with
+// textContent (never innerHTML), so a draft that happened to contain
+// "<script>" or any other HTML-looking text is inert either way; this
+// only adds math typesetting on top of that, it doesn't loosen it.
+// Guarded by typeof in case the CDN script hasn't finished loading yet
+// (or failed to load at all) - math delimiters just render as their
+// literal source text instead, never a page-breaking error.
+function renderMath(el) {
+  if (typeof renderMathInElement !== "function") return;
+  try {
+    renderMathInElement(el, {
+      delimiters: [
+        { left: "\\[", right: "\\]", display: true },
+        { left: "\\(", right: "\\)", display: false },
+        { left: "$$", right: "$$", display: true },
+        { left: "$", right: "$", display: false },
+      ],
+      throwOnError: false,
+    });
+  } catch (err) {
+    console.warn("KaTeX render failed, showing raw text instead:", err);
+  }
+}
+
 function addTutorBubble(data) {
   addRow("tutor", (bubble) => {
     bubble.textContent = data.text;
@@ -388,6 +432,8 @@ function addTutorBubble(data) {
       cites.textContent = "Sources: " + data.citations.join(", ");
       bubble.appendChild(cites);
     }
+
+    renderMath(bubble);
   });
 }
 
